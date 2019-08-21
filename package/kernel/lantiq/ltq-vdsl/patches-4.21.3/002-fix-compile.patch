@@ -1,0 +1,14 @@
+--- a/src/common/drv_dsl_cpe_os_linux.c
++++ b/src/common/drv_dsl_cpe_os_linux.c
+@@ -586,7 +586,11 @@ DSL_void_t* DSL_DRV_VMalloc(
+    DSL_DRV_size_t    nSize)
+ {
+    /* VRX500-BU: Better to use vmalloc or vzmalloc here?! */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)
+    return __vmalloc((unsigned long)nSize, GFP_KERNEL, PAGE_KERNEL);
++#else
++   return __vmalloc((unsigned long)nSize, GFP_KERNEL);
++#endif
+    /*   return vmalloc(nSize);*/
+ }
+ 
