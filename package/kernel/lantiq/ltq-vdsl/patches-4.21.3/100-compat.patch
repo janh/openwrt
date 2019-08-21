@@ -1,0 +1,32 @@
+--- a/src/device/drv_dsl_cpe_device_vrx.c
++++ b/src/device/drv_dsl_cpe_device_vrx.c
+@@ -23,9 +23,11 @@
+ #ifdef DSL_VRX_DEVICE_VR11
+ #include <net/dsl_tc.h>
+ #else
++#ifndef DSL_VRX_DEVICE_VR9
+ #include <net/ppa_stack_al.h>
+ #endif
+ #endif
++#endif
+ 
+ #undef DSL_DBG_BLOCK
+ #define DSL_DBG_BLOCK DSL_DBG_DEVICE
+--- a/src/common/drv_dsl_cpe_os_linux.c
++++ b/src/common/drv_dsl_cpe_os_linux.c
+@@ -1012,12 +1012,11 @@ DSL_int32_t DSL_DRV_ThreadShutdown(
+ 
+ DSL_uint32_t DSL_DRV_SysTimeGet(DSL_uint32_t nOffset)
+ {
+-   struct timeval tv;
++   struct timespec64 now;
+    DSL_uint32_t nTime = 0;
+ 
+-   memset(&tv, 0, sizeof(tv));
+-   do_gettimeofday(&tv);
+-   nTime = (DSL_uint32_t)tv.tv_sec;
++   ktime_get_real_ts64(&now);
++   nTime = (DSL_uint32_t)now.tv_sec;
+ 
+    if ( (nOffset == 0) || (nOffset > nTime) )
+    {
