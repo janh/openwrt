@@ -27,9 +27,8 @@ avm,fritzbox-4040)
 	ucidef_set_led_netdev "wan" "WAN" "green:wan" "eth1"
 	ucidef_set_led_switch "lan" "LAN" "green:lan" "switch0" "0x1e"
 	;;
-avm,fritzbox-7530 |\
-glinet,gl-b1300 |\
-mikrotik,lhgg-60ad)
+avm,fritzbox-7530)
+	ucidef_set_led_netdev "dsl" "DSL" "green:info" "dsl0"
 	ucidef_set_led_wlan "wlan" "WLAN" "green:wlan" "phy0tpt"
 	;;
 edgecore,oap100)
@@ -51,6 +50,10 @@ engenius,ens620ext)
 	ucidef_set_led_wlan "wlan5g" "WLAN5G" "green:wlan5g" "phy1tpt"
 	ucidef_set_led_netdev "lan1" "LAN1" "green:lan1" "eth0"
 	ucidef_set_led_netdev "lan2" "LAN2" "green:lan2" "eth1"
+	;;
+glinet,gl-b1300 |\
+mikrotik,lhgg-60ad)
+	ucidef_set_led_wlan "wlan" "WLAN" "green:wlan" "phy0tpt"
 	;;
 mikrotik,cap-ac)
 	ucidef_set_led_default "power" "POWER" "blue:power" "1"
