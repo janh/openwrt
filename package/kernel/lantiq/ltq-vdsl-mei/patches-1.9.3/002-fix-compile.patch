@@ -1,0 +1,13 @@
+--- a/src/mei_cpe_appl_osmap.h
++++ b/src/mei_cpe_appl_osmap.h
+@@ -38,10 +38,6 @@ extern "C"
+ #include <errno.h>
+ #include <ctype.h>
+ #include <sys/ioctl.h>
+-
+-extern int snprintf (char *__restrict __s, size_t __maxlen,
+-           __const char *__restrict __format, ...)
+-     __THROW __attribute__ ((__format__ (__printf__, 3, 4)));
+ #endif
+ 
+ /* ==========================================================================
