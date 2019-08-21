@@ -26,13 +26,11 @@ PKG_FIXUP:=autoreconf
 
 include $(INCLUDE_DIR)/package.mk
 
-# TODO this driver depends on the vrx518 dsl firmware, add this dependency if
-# that ever gets a compatible license
 define KernelPackage/ltq-vdsl-vr11
   TITLE:=vdsl driver
   SECTION:=sys
   SUBMENU:=Network Devices
-  DEPENDS:=@TARGET_ipq40xx +kmod-ltq-vdsl-vr11-mei
+  DEPENDS:=@TARGET_ipq40xx +kmod-ltq-vdsl-vr11-mei +dsl-vr11-firmware-xdsl-a
   FILES:=$(PKG_BUILD_DIR)/src/drv_dsl_cpe_api.ko
   AUTOLOAD:=$(call AutoLoad,51,drv_dsl_cpe_api)
 endef
