@@ -1,0 +1,66 @@
+--- a/src/drv_mei_cpe_linux.c
++++ b/src/drv_mei_cpe_linux.c
+@@ -1527,7 +1527,11 @@ struct proc_entry {
+    char name[32];
+    proc_rd_callback_t rd;
+    proc_wr_callback_t wr;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+    struct file_operations ops;
++#else
++   struct proc_ops ops;
++#endif
+    int entity;
+ };
+ 
+@@ -2065,6 +2069,7 @@ static int mei_proc_single_open(struct i
+ static void mei_proc_entry_create(struct proc_dir_entry *parent_node,
+                                   struct proc_entry *proc_entry)
+ {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+    memset(&proc_entry->ops, 0, sizeof(struct file_operations));
+    proc_entry->ops.owner = THIS_MODULE;
+ 
+@@ -2075,6 +2080,17 @@ static void mei_proc_entry_create(struct
+    proc_entry->ops.llseek = seq_lseek;
+    if (proc_entry->wr)
+       proc_entry->ops.write = proc_entry->wr;
++#else
++   memset(&proc_entry->ops, 0, sizeof(struct proc_ops));
++
++   proc_entry->ops.proc_open = mei_proc_single_open;
++   proc_entry->ops.proc_release = single_release;
++
++   proc_entry->ops.proc_read = seq_read;
++   proc_entry->ops.proc_lseek = seq_lseek;
++   if (proc_entry->wr)
++      proc_entry->ops.proc_write = proc_entry->wr;
++#endif
+ 
+    proc_create_data(proc_entry->name,
+                      (S_IFREG | S_IRUGO),
+--- a/src/drv_mei_cpe_linux_proc_config.c
++++ b/src/drv_mei_cpe_linux_proc_config.c
+@@ -1277,6 +1277,7 @@ static int mei_proc_single_open(struct i
+ 	return single_open(file, mei_seq_single_show, PDE_DATA(inode));
+ }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
+ static struct file_operations proc_ops = {
+    .owner = THIS_MODULE,
+    .open = mei_proc_single_open,
+@@ -1285,6 +1286,15 @@ static struct file_operations proc_ops =
+    .llseek = seq_lseek,
+    .write = MEI_ProcWriteConfig
+ };
++#else
++static struct proc_ops proc_ops = {
++   .proc_open = mei_proc_single_open,
++   .proc_release = single_release,
++   .proc_read = seq_read,
++   .proc_lseek = seq_lseek,
++   .proc_write = MEI_ProcWriteConfig
++};
++#endif
+ 
+ /**
+    Create an read/write proc entry for configuration.
