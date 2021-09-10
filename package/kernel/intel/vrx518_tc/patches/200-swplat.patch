@@ -1,0 +1,1331 @@
+--- a/dcdp/platform/sw_plat.c
++++ b/dcdp/platform/sw_plat.c
+@@ -36,10 +36,13 @@
+ #include <linux/printk.h>
+ #include <linux/etherdevice.h>
+ #include <linux/workqueue.h>
+-#include "inc/dsl_tc.h"
++#include "../inc/dsl_tc.h"
+ 
+ #include "../inc/tc_main.h"
+ #include "../inc/reg_addr.h"
++#include "../inc/tc_common.h"
++
++#include "../inc/fw/vrx518_addr_def.h"
+ 
+ 
+ #define PMAC_SIZE		8
+@@ -70,7 +73,7 @@
+ #define TXIN_DNUM  	128
+ #define TXOUT_DNUM	128
+ #define RXOUT_DNUM	1024
+-#define RXIN_DNUM	1024
++#define RXIN_DNUM	0
+ 
+ #define TXIN_CHECK_NUM	32
+ 
+@@ -80,22 +83,44 @@
+ 	void *umt_dst;
+ 	u32 umt_phydst;
+ 	u32 dnum;
++	u32 dsize;
+ 	int idx; /* SoC RX/TX index */
+-	int cnt;
+-	void *cnt_addr;
+-	u32 cnt_phyaddr;
+ 	int ep_dev_idx;
+ };
+ 
++struct tx_list_item {
++	size_t len;
++};
++
++struct tx_list {
++	struct tx_list_item *data;
++	u32 dnum;
++};
++
++struct txbuf_list_item {
++	void *buf;
++	u32 dataptr;
++	dma_addr_t phyaddr;
++};
++
++struct txbuf_list {
++	struct txbuf_list_item *data;
++	u32 dnum;
++	int idx_empty;
++	int idx_dataptr;
++};
++
+ struct aca_ring_grp {
+ 	struct aca_ring rxin;
+ 	struct aca_ring txin;
+ 	struct aca_ring rxout;
+ 	struct aca_ring txout;
++	struct tx_list txlist;
++	struct txbuf_list txbuflist;
+ };
+ 
+-#if 1
+-struct dma_desc {
++#if defined(__LITTLE_ENDIAN)
++struct dma_tx_desc {
+ 	/* DW 0 */
+ 	u32 qid;
+ 	/* DW 1 */
+@@ -112,8 +137,26 @@
+ 	u32 c:1;
+ 	u32 own:1;
+ }__packed;
++
++struct dma_rx_desc {
++	/* DW 0 */
++	u32 qid;
++	/* DW 1 */
++	u32 res2;
++	/* DW 2 */
++	u32 data_len:16;
++	u32 res0:7;
++	u32 byte_off:3;
++	u32 res1:2;
++	u32 eop:1;
++	u32 sop:1;
++	u32 c:1;
++	u32 own:1;
++	/* DW 3 */
++	u32 data_ptr;
++}__packed;
+ #else
+-struct dma_desc {
++struct dma_tx_desc {
+ 	/* DW 0 */
+ 	u32 qid;
+ 	/* DW 1 */
+@@ -131,14 +174,25 @@
+ 	u32 data_len:16;
+ }__packed;
+ 
++struct dma_rx_desc {
++	/* DW 0 */
++	u32 qid;
++	/* DW 1 */
++	u32 res;
++	/* DW 2 */
++	u32 own:1;
++	u32 c:1;
++	u32 sop:1;
++	u32 eop:1;
++	u32 res1:2;
++	u32 byte_off:3;
++	u32 res0:7;
++	u32 data_len:16;
++	/* DW 3 */
++	u32 data_ptr;
++}__packed;
+ #endif
+ 
+-struct plat_dma {
+-	u32 chan; /* CHAN IID */
+-	u32 dma_chan; /* CONTROLLER/PORT/CHAN ID */
+-	u32 ds_dnum; /* DS descriptor number */
+-};
+-
+ struct plat_umt {
+ 	u32 id;
+ 	u32 cbm_id;
+@@ -152,27 +206,21 @@
+ 	enum dsl_tc_mode tc_mode;
+ };
+ 
+-#if 0
+-struct tc_coc {
+-	enum ltq_cpufreq_state coc_stat;
+-	struct tasklet_struct coc_task;
+-};
+-#endif
+-
+ struct plat_priv {
+ 	struct tc_priv *tc_priv;
+ 	struct plat_umt umt[EP_MAX_NUM];
+-	struct plat_dma dma[EP_MAX_NUM];
+ 	struct ltq_mei_atm_showtime_info dsl_ops;
+ 	struct tc_req req_work;
+ 	struct aca_ring_grp soc_rings;
+-	/* struct tc_coc coc;*/
++	struct net_device *netdev;
+ };
+ 
+ static struct plat_priv *g_plat_priv;
+ struct tasklet_struct txout_task;
+ struct tasklet_struct rxout_task;
+ 
++static DEFINE_SPINLOCK(tx_spinlock);
++
+ static void txout_action(struct tc_priv *priv, struct aca_ring *txout);
+ 
+ void *ppa_callback_get(e_ltq_mei_cb_type type)
+@@ -259,122 +307,152 @@
+ 	return g_plat_priv->tc_priv;
+ }
+ 
+-static int32_t plat_rx(struct net_device *rxdev, struct net_device *txdev,
+-	struct sk_buff *skb, int32_t len)
++static int txlist_init(struct tx_list *list, u32 dnum)
+ {
+-	int32_t err;
+-	struct tc_priv *tc_priv = plat_to_tcpriv();
++	list->dnum = dnum;
+ 
+-	if (unlikely(!rxdev)) {
+-		if (txdev != NULL)
+-			tc_dbg(tc_priv, MSG_RX,
+-				"Recv undelivered packet from DP lib\n");
+-		else
+-			tc_dbg(tc_priv, MSG_RX, "Recv unknown packet\n");
+-		err = -ENODEV;
+-		goto err1;
++	list->data = kzalloc(dnum * sizeof(struct tx_list_item), GFP_KERNEL);
++	if (!list->data) {
++		pr_err("Failed to allocate TX list!\n");
++		return -1;
+ 	}
+ 
+-	tc_priv->tc_ops.recv(rxdev, skb);
+ 	return 0;
++}
+ 
+-err1:
+-	dev_kfree_skb_any(skb);
+-
+-	return err;
++static void txlist_free(struct tx_list *list)
++{
++	kfree(list->data);
+ }
+ 
+-#if 0
+-static int32_t plat_get_subifid(struct net_device *dev, struct sk_buff *skb,
+-	void *subif_data, uint8_t dst_mac[MAX_ETH_ALEN],
+-	dp_subif_t *subif, uint32_t flags)
++static int txbuflist_init(struct txbuf_list *list, u32 dnum)
+ {
+-	int qid;
+-	struct tc_priv *priv = plat_to_tcpriv();
++	struct device *pdev = g_plat_priv->tc_priv->ep_dev[0].dev;
++	struct txbuf_list_item *item;
++	int i;
+ 
+-	qid = priv->tc_ops.get_qid(dev, skb, subif_data, flags);
+-	if (qid < 0)
+-		return qid;
+-	else
+-		subif->subif = qid;
++	list->dnum = dnum;
++	list->idx_empty = 0;
++	list->idx_dataptr = 0;
++
++	list->data = kzalloc(dnum * sizeof(struct txbuf_list_item), GFP_KERNEL);
++	if (!list->data) {
++		pr_err("Failed to allocate TX buffer list!\n");
++		return -1;
++	}
++
++	for (i = 0; i < list->dnum; i++) {
++		item = &list->data[i];
++
++		item->buf = kmalloc(DMA_PACKET_SZ, GFP_KERNEL);
++		if (!item->buf) {
++			pr_err("Failed to allocate TX buffer!\n");
++			return -1;
++		}
++
++		item->phyaddr = dma_map_single(pdev, item->buf, DMA_PACKET_SZ, DMA_TO_DEVICE);
++		if (unlikely(dma_mapping_error(pdev, item->phyaddr))) {
++			pr_err("TX buffer DMA mapping failed!\n");
++			return -1;
++		}
++	}
+ 
+ 	return 0;
+ }
+-#endif
+ 
+-#if 0
+-static void plat_coc_tasklet(unsigned long arg)
++static inline int txbuflist_find_empty(struct txbuf_list *list)
+ {
+-	/* change state to D0 */
+-	if (g_plat_priv->coc.coc_stat == LTQ_CPUFREQ_PS_D0)
+-		return;
++	int i;
++
++	for (i = 0; i < list->dnum; i++) {
++		if (!list->data[list->idx_empty].dataptr) {
++			return list->idx_empty;
++		}
+ 
+-	g_plat_priv->coc.coc_stat = LTQ_CPUFREQ_PS_D0;
++		list->idx_empty = (list->idx_empty + 1) % list->dnum;
++	}
++
++	return -1;
+ }
+ 
+-static void plat_coc_req(void)
++static struct txbuf_list_item *txbuflist_get_item(struct txbuf_list *list, void *data, size_t len, u32 alignment)
+ {
+-	tasklet_schedule(&g_plat_priv->coc.coc_task);
+-}
++	struct device *pdev = g_plat_priv->tc_priv->ep_dev[0].dev;
++	struct txbuf_list_item *item;
++	int idx;
+ 
++	idx = txbuflist_find_empty(list);
++	if (unlikely(idx < 0)) {
++		return NULL;
++	}
+ 
+-static int32_t plat_coc_stat(enum ltq_cpufreq_state new_state,
+-	enum ltq_cpufreq_state old_state, uint32_t flags)
+-{
+-	struct tc_priv *priv = plat_to_tcpriv();
+-	tc_dbg(priv, MSG_COC,
+-		"COC current state: %d, new state: %d, old state: %d\n",
+-		g_plat_priv->coc.coc_stat, new_state, old_state);
++	item = &list->data[idx];
+ 
+-	if (g_plat_priv->coc.coc_stat != new_state) {
+-		g_plat_priv->coc.coc_stat = new_state;
++	// dma_sync_single_for_cpu(pdev, item->phyaddr, DMA_PACKET_SZ, DMA_TO_DEVICE);
+ 
+-		if (new_state == LTQ_CPUFREQ_PS_D3) {
+-			/* Enable interrupt for DS packet */
+-			priv->tc_ops.irq_on(MBOX_PKT_RX);
+-		} else {
+-			/* Disable interrupt for DS packet */
+-			priv->tc_ops.irq_off(MBOX_PKT_RX);
+-		}
+-	}
++	memcpy(item->buf, data, len);
++	item->dataptr = item->phyaddr & (~alignment);
+ 
+-	return 0;
++	dma_sync_single_for_device(pdev, item->phyaddr, DMA_PACKET_SZ, DMA_TO_DEVICE);
++
++	return item;
+ }
+-#endif
+ 
+-static inline int ring_dist(int idx1, int idx2, int size)
++static inline int txbuflist_find_dataptr(struct txbuf_list *list, u32 dataptr)
+ {
+-	if (idx1 >= idx2)
+-		return (idx1 - idx2);
+-	else
+-		return (idx1 + size - idx2);
++	int i;
++
++	for (i = 0; i < list->dnum; i++) {
++		if (list->data[list->idx_dataptr].dataptr == dataptr) {
++			return list->idx_dataptr;
++		}
++
++		list->idx_dataptr = (list->idx_dataptr + 1) % list->dnum;
++	}
++
++	return -1;
+ }
+ 
+-static inline int __ring_full(int idx, int cnt, u32 dnum)
++static bool txbuflist_clear_item(struct txbuf_list *list, u32 dataptr)
+ {
+-	if (ring_dist(idx, cnt, dnum) < dnum - 1)
+-		return 0;
+-	else
+-		return 1;
++	struct txbuf_list_item *item;
++	int idx;
++
++	idx = txbuflist_find_dataptr(list, dataptr);
++	if (unlikely(idx < 0)) {
++		return false;
++	}
++
++	item = &list->data[idx];
++
++	item->dataptr = 0;
++
++	return true;
+ }
+ 
+-static inline int ring_full(struct aca_ring *ring)
++static void txbuflist_free(struct txbuf_list *list)
+ {
+-	if (!__ring_full(ring->idx, ring->cnt, ring->dnum))
+-		return 0;
++	struct device *pdev = g_plat_priv->tc_priv->ep_dev[0].dev;
++	struct txbuf_list_item *item;
++	int i;
+ 
+-	/* if ring full, update cumulative counter and check again */
+-	ring->cnt = readl(ring->cnt_addr) % ring->dnum;
++	if (list->data) {
++		for (i = 0; i < list->dnum; i++) {
++			item = &list->data[i];
++
++			if (item->phyaddr) {
++				dma_unmap_single(pdev, item->phyaddr, DMA_PACKET_SZ, DMA_TO_DEVICE);
++			}
++			kfree(item->buf);
++		}
++	}
+ 
+-	return __ring_full(ring->idx, ring->cnt, ring->dnum);
++	kfree(list->data);
+ }
+ 
+-#define ring_idx_inc(ring, idx)						\
+-	do { ring->idx = (ring->idx + 1) % ring->dnum; } while (0);
+-
+-static inline void ring_cnt_update(struct aca_ring *ring)
++static inline void ring_idx_inc(struct aca_ring *ring)
+ {
+-	ring->cnt = readl(ring->cnt_addr) % ring->dnum;
++	ring->idx = (ring->idx + 1) % ring->dnum;
+ }
+ 
+ static struct sk_buff *txin_skb_prepare(struct sk_buff *skb)
+@@ -399,252 +477,381 @@
+ 	return nskb;
+ }
+ 
+-static int ring_mmap(void *mem, int size,
+-	enum dma_data_direction dir, u32 *addr)
++/*static void dump_desc(void *desc, char *name, u32 idx)
+ {
+-	struct device *pdev;
+-	dma_addr_t phy_addr;
+-	struct tc_priv *priv;
+-	u32 addr1;
++	u32 *data = (u32 *)desc;
+ 
+-	priv = g_plat_priv->tc_priv;
+-	pdev = priv->ep_dev[0].dev;
++	pr_info("ring %s: desc idx %d: 0x%x 0x%x 0x%x 0x%x\n",
++		name, idx, data[0], data[1], data[2], data[3]);
++}
+ 
+-	phy_addr = dma_map_single(pdev, mem, size, dir);
+-	if (unlikely(dma_mapping_error(pdev, phy_addr))) {
+-		tc_err(priv, MSG_INIT,
+-			"DMA address mapping error: buf: 0x%x, size: %d, dir: %d\n",
+-			(u32)mem, size, dir);
+-		return -ENOMEM;
++static void dump_tx_ring_state(struct aca_ring *ring, char *name)
++{
++	char *strbuf;
++	struct dma_tx_desc *desc;
++	int i;
++
++	pr_info("ring %s: idx: %d\n", name, ring->idx);
++
++	strbuf = kzalloc(ring->dnum * sizeof(char) + 1, GFP_KERNEL);
++
++	desc = (struct dma_tx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->own ? '1' : '0';
++		desc += 1;
+ 	}
+-	dma_unmap_single(pdev, phy_addr, size, dir);
++	pr_info("ring %s: own: %s\n", name, strbuf);
+ 
+-	pr_info("vaddr: 0x%x, phyaddr: 0x%lx\n", (u32)mem, phy_addr);
+-	addr1 = (u32)phy_addr;
++	desc = (struct dma_tx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->c ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: c: %s\n", name, strbuf);
+ 
+-	if (addr)
+-		*addr = addr1;
++	desc = (struct dma_tx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->data_ptr ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: data_ptr: %s\n", name, strbuf);
+ 
+-	return 0;
++	kfree(strbuf);
+ }
+ 
+-static void txin_action(struct tc_priv *priv, struct aca_ring *txin,
+-		struct sk_buff *skb, int qid, enum tc_pkt_type type)
++static void dump_rx_ring_state(struct aca_ring *ring, char *name)
++{
++	char *strbuf;
++	struct dma_rx_desc *desc;
++	int i;
++
++	pr_info("ring %s: idx: %d\n", name, ring->idx);
++
++	strbuf = kzalloc(ring->dnum * sizeof(char) + 1, GFP_KERNEL);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->own ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: own: %s\n", name, strbuf);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->c ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: c: %s\n", name, strbuf);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->sop ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: sop: %s\n", name, strbuf);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->eop ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: eop: %s\n", name, strbuf);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->data_len ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: data_len: %s\n", name, strbuf);
++
++	desc = (struct dma_rx_desc *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = desc->data_ptr ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: data_ptr: %s\n", name, strbuf);
++
++	kfree(strbuf);
++}
++
++static void dump_txout_desc(u32 *desc, char *name, u32 idx)
++{
++	u32 addr = __va(*desc);
++	u32 *qos_desc = (u32 *)addr;
++
++	pr_info("ring %s: desc idx %d: 0x%x (0x%x)\n",
++		name, idx, *desc, addr);
++
++	pr_info("ring %s: data 0x%x 0x%x, 0x%x, 0x%x 0x%x 0x%x, 0x%x, 0x%x\n",
++		name, qos_desc[0], qos_desc[1], qos_desc[2], qos_desc[3], qos_desc[4], qos_desc[5], qos_desc[6], qos_desc[7]);
++}
++
++static void dump_txout_ring_state(struct aca_ring *ring, char *name)
++{
++	char *strbuf;
++	u32 *desc;
++	int i;
++
++	pr_info("ring %s: idx: %d\n", name, ring->idx);
++
++	strbuf = kzalloc(ring->dnum * sizeof(char) + 1, GFP_KERNEL);
++
++	desc = (u32 *)ring->dbase_mem;
++	for (i = 0; i < ring->dnum; i++) {
++		strbuf[i] = (*desc) ? '1' : '0';
++		desc += 1;
++	}
++	pr_info("ring %s: val: %s\n", name, strbuf);
++
++	kfree(strbuf);
++}
++
++static void dump_buf(void *buf, size_t len)
+ {
+-	struct dma_desc *desc, desc1;
+-	u32 phyaddr, *dst, *src;
++	char *data = (char *)buf;
+ 	int i;
+ 
+-	if (ring_full(txin)) {
+-		tc_dbg(priv, MSG_TX,
+-			"TXIN Ring Full!: idx: %d, cnt: %d\n",
+-			txin->idx, txin->cnt);
++	for (i = 0; i < len; i++) {
++		if (i == 0) {
++			printk(KERN_INFO "%02x ", data[i]);
++		} else if ((i+1) % 16 == 0 || i == len-1) {
++			printk(KERN_CONT "%02x\n", data[i]);
++		} else {
++			printk(KERN_CONT "%02x ", data[i]);
++		}
++	}
++}*/
++
++static int txin_action(struct tc_priv *priv, struct aca_ring *txin,
++		struct sk_buff *skb, int qid, enum tc_pkt_type type)
++{
++	struct aca_ring *txout = &g_plat_priv->soc_rings.txout;
++	struct tx_list *txlist = &g_plat_priv->soc_rings.txlist;
++	struct txbuf_list *txbuflist = &g_plat_priv->soc_rings.txbuflist;
++	struct dma_tx_desc *desc;
++	struct txbuf_list_item *txbuflist_item;
++	unsigned long flags;
++
++	if (!g_plat_priv->netdev) {
++		spin_lock_irqsave(&tx_spinlock, flags);
++	}
++
++	//dump_tx_ring_state(txin, "txin");
++
++	if ((txin->idx + 2) % txin->dnum == txout->idx) {
++		if (g_plat_priv->netdev) {
++			netif_stop_queue(g_plat_priv->netdev);
++		}
++	} else if ((txin->idx + 1) % txin->dnum == txout->idx) {
++		tc_err(priv, MSG_TX, "TXIN ring full: txin: %d, txout: %d\n",
++			txin->idx, txout->idx);
+ 		goto err1;
+ 	}
+ 
++	desc = (struct dma_tx_desc *)txin->dbase_mem;
++	desc += txin->idx;
++
+ 	skb = txin_skb_prepare(skb);
+ 	if (!skb)
+-		return;
++		goto err2;
+ 
+-	if (ring_mmap(skb->data, skb->len, DMA_TO_DEVICE, &phyaddr) < 0) {
+-		tc_err(priv, MSG_TX, "TXIN data mmap failed: 0x%x\n",
+-			(unsigned int)skb->data);
++	/*
++	 * This copies the data to a buffer in the driver. This is necessary because there doesn't seem to be a reliable
++	 * signal from the device when it has consumed a buffer allowing it to be safely freed. The data_ptr is only
++	 * returned in TXOUT after another fixed number of packets (depending on the size of internal buffers) has been
++	 * transmitted, which may not happen in the near future. Making a copy allows to free the SKB here.
++	 */
++	txbuflist_item = txbuflist_get_item(txbuflist, skb->data, skb->len, 0x7);
++	if (unlikely(!txbuflist_item)) {
++		pr_err("No TX buffer available!\n");
+ 		goto err1;
+ 	}
+ 
+-	/* init a new descriptor for the new skb */
+-	desc = (struct dma_desc *)txin->dbase_mem;
+-	desc += txin->idx;
++	if (g_plat_priv->netdev) {
++		netdev_sent_queue(g_plat_priv->netdev, skb->len);
++	}
++	txlist->data[txin->idx].len = skb->len;
+ 
+ 	memset(desc, 0, sizeof(*desc));
+-	memset(&desc1, 0, sizeof(desc1));
+-	desc1.own = 1;
+-	desc1.c = 1;
+-	desc1.sop = 1;
+-	desc1.eop = 1;
+-	desc1.byte_off = phyaddr & 0x7;
+-	desc1.data_len = skb->len;
+-
+-	desc1.data_ptr = phyaddr & (~(0x7));
+-	desc1.qid = qid;
+-
+-	dst = (u32 *)desc;
+-	src = (u32 *)&desc1;
+-	for (i = 0; i < DW_SZ(desc1); i++)
+-		dst[i] = cpu_to_be32(src[i]);
+-
+-	pr_info("txin idx: %d\n", txin->idx);
+-	pr_info("descriptor dst val:(DW0-DW3): 0x%x, 0x%x, 0x%x, 0x%x\n",
+-		dst[0], dst[1], dst[2], dst[3]);
+-	pr_info("descriptor src val: (DW0-DW3): 0x%x, 0x%x, 0x%x, 0x%x\n",
+-		src[0], src[1], src[2], src[3]);
+-
+-	if (ring_mmap(desc, sizeof(*desc), DMA_TO_DEVICE, NULL) < 0) {
+-		tc_err(priv, MSG_TX, "TXIN descriptor mmap failed: 0x%x\n",
+-			(unsigned int)desc);
+-		goto err1;
+-	}
+ 
+-	ring_idx_inc(txin, idx);
++	desc->data_ptr = txbuflist_item->dataptr;
++	desc->byte_off = txbuflist_item->phyaddr & 0x7;
++	desc->data_len = skb->len;
++	desc->qid = qid;
++
++	desc->sop = 1;
++	desc->eop = 1;
++	desc->c = 1;
++	desc->own = 1;
++
++	dev_kfree_skb_any(skb);
++
++	//dump_desc(desc, "txin", txin->idx);
++
++	ring_idx_inc(txin);
+ 
+ 	/* update TXIN UMT by 1 */
+ 	writel(1, txin->umt_dst);
+-	pr_info("TXIN send txin packet 1 packet\n");
+ 
+-	/* Free skb */
+-	dev_kfree_skb_any(skb);
++	if (!g_plat_priv->netdev) {
++		spin_unlock_irqrestore(&tx_spinlock, flags);
++	}
+ 
+-	/* check txout for testing*/
+-	//txout_action(plat_to_tcpriv(), &g_plat_priv->soc_rings.txout);
+-	return;
++	//pr_info("TXIN send txin packet 1 packet\n");
++
++	return 0;
+ 
+ err1:
+-	//skb->delay_free = 0;
+ 	dev_kfree_skb_any(skb);
++
++err2:
++	if (!g_plat_priv->netdev) {
++		spin_unlock_irqrestore(&tx_spinlock, flags);
++	}
++
++	return -1;
+ }
+ 
+ static void txout_action(struct tc_priv *priv, struct aca_ring *txout)
+ {
+-	int i, cnt;
+-	struct dma_desc *desc;
+-	u32 ptr;
+-	void *mem;
++	struct aca_ring *txin = &g_plat_priv->soc_rings.txin;
++	struct tx_list *txlist = &g_plat_priv->soc_rings.txlist;
++	struct txbuf_list *txbuflist = &g_plat_priv->soc_rings.txbuflist;
++	int i, cnt, bytes;
++	u32 *desc;
++	unsigned long flags;
+ 
+-	ring_cnt_update(txout);
+-	cnt = ring_dist(txout->idx, txout->cnt, txout->dnum);
++	//dump_txout_ring_state(txout, "txout");
+ 
+-	for (i = 0; i < cnt; i++) {
++	cnt = 0;
++	bytes = 0;
++
++	if (g_plat_priv->netdev) {
++		netif_tx_lock(g_plat_priv->netdev);
++	} else {
++		spin_lock_irqsave(&tx_spinlock, flags);
++	}
++
++	for (i = 0; i < txout->dnum; i++) {
+ 		desc = txout->dbase_mem;
+ 		desc += txout->idx;
+-		/* read from memory */
+-		if (ring_mmap(desc, sizeof(*desc), DMA_FROM_DEVICE, NULL) < 0) {
+-			tc_err(priv, MSG_TX,
+-				"map TXOUT DMA descriptor failed\n");
+-			continue;
++
++		// *desc is a pointer to a QoSQ buffer or the data_ptr of some previously sent packet
++		if (*desc == 0) {
++			break;
+ 		}
+-		ptr = desc->data_ptr + desc->byte_off;
+-		mem = (void * __force)__va(ptr);
+-		kfree(mem);
+-		ring_idx_inc(txout, idx);
+-	}
+ 
+-	if (cnt)
+-		writel(cnt, txout->umt_dst);
+-	pr_info("TXOUT received %d descriptors\n", cnt);
+-}
++		//dump_txout_desc(desc, "txout", txout->idx);
+ 
+-static void rxin_action(struct tc_priv *priv,
+-		struct aca_ring *rxin, int size, int cnt)
+-{
+-	int i, dist;
+-	struct dma_desc *desc;
+-	void *data_ptr;
+-	u32 phyaddr;
+-
+-	if (ring_full(rxin)) {
+-		tc_dbg(priv, MSG_RX,
+-			"RXIN Ring Full!: idx: %d, cnt: %d\n",
+-			rxin->idx, rxin->cnt);
+-		return;
+-	}
++		if (txout->idx == txin->idx) {
++			tc_err(priv, MSG_TX, "TXOUT unexpected non-zero descriptor: txin: %d, txout: %d\n",
++				txin->idx, txout->idx);
++			break;
++		}
++
++		cnt++;
++		bytes += txlist->data[txout->idx].len;
+ 
+-	dist = ring_dist(rxin->idx, rxin->cnt, rxin->dnum);
+-	if (cnt > dist) {
+-		WARN_ONCE(1, "RXIN NO enough room for free buffers: free: %d, room: %d\n",
+-			cnt, dist);
+-		cnt = dist;
++		txbuflist_clear_item(txbuflist, *desc);
++
++		*desc = 0;
++
++		ring_idx_inc(txout);
+ 	}
+ 
+-	for (i = 0; i < cnt; i++) {
+-		data_ptr = kmalloc(size, GFP_ATOMIC);
+-		if (!data_ptr) {
+-			tc_err(priv, MSG_RX,
+-				"RXIN kmalloc data buffer failed: %d\n", size);
+-			goto err1;
+-		}
++	if (cnt) {
++		writel(cnt, txout->umt_dst+0x28); // TXOUT_HD_ACCUM_SUB instead of TXOUT_HD_ACCUM_ADD
+ 
+-		if (ring_mmap(data_ptr, size, DMA_FROM_DEVICE, &phyaddr) < 0) {
+-			tc_err(priv, MSG_RX,
+-				"RXIN kmalloc data buffer failed: %d\n", size);
+-			goto err2;
++		if (g_plat_priv->netdev) {
++			netdev_completed_queue(g_plat_priv->netdev, cnt, bytes);
+ 		}
++	}
+ 
+-		desc = (struct dma_desc *)rxin->dbase_mem;
+-		desc += rxin->idx;
+-		memset(desc, 0, sizeof(*desc));
+-
+-		desc->data_len = size;
+-		desc->byte_off = phyaddr & 0x7;
+-		desc->eop = 1;
+-		desc->sop = 1;
+-		desc->own = 1;
+-
+-		desc->data_ptr = phyaddr;
+-
+-		
+-		if (ring_mmap(desc, sizeof(*desc), DMA_TO_DEVICE, NULL) < 0) {
+-			tc_err(priv, MSG_RX, "RXIN descriptor mmap failed: 0x%x\n",
+-				(unsigned int)desc);
+-			goto err2;
+-		}
+-		
+-		ring_idx_inc(rxin, idx);
++	if (g_plat_priv->netdev) {
++		netif_tx_unlock(g_plat_priv->netdev);
++	} else {
++		spin_unlock_irqrestore(&tx_spinlock, flags);
++	}
++
++	if (cnt && g_plat_priv->netdev && netif_queue_stopped(g_plat_priv->netdev)) {
++		netif_wake_queue(g_plat_priv->netdev);
+ 	}
+ 
++	//pr_info("TXOUT received %d descriptors\n", cnt);
++}
++
++static void rxin_action(struct tc_priv *priv,
++		struct aca_ring *rxin, int size, int cnt)
++{
++	//int i;
++
++	//dump_rx_ring_state(rxin, "rxin");
++
++	//for (i = 0; i < cnt; i++) {
++	//	ring_idx_inc(rxin);
++	//}
++
+ 	/* update RXIN UMT*/
+-	writel(i, rxin->umt_dst);
+-	pr_info("rxin refill %d descriptors\n", i);
+-	return;
++	writel(cnt, rxin->umt_dst);
+ 
+-err2:
+-	kfree(data_ptr);
+-err1:
+-	if (i)
+-		writel(i, rxin->umt_dst);
+-	return;
++	//pr_info("rxin refill %d descriptors\n", cnt);
+ }
+ 
+ static int rxout_action(struct tc_priv *priv, struct aca_ring *rxout)
+ {
++	struct device *pdev = priv->ep_dev[0].dev;
+ 	int i, cnt;
+-	struct dma_desc *desc;
+-	u32 ptr;
+-	void *mem;
++	struct dma_rx_desc *desc;
++	void *ptr, *dst;
+ 	struct sk_buff *skb;
+ 
+-	ring_cnt_update(rxout);
+-	cnt = ring_dist(rxout->idx, rxout->cnt, rxout->dnum);
++	//dump_rx_ring_state(rxout, "rxout");
+ 
+-	for (i = 0; i < cnt; i++) {
++	cnt = 0;
++	for (i = 0; i < rxout->dnum; i++) {
+ 		desc = rxout->dbase_mem;
+ 		desc += rxout->idx;
+ 
+-		/* read from memory */
+-		if (ring_mmap(desc, sizeof(*desc), DMA_FROM_DEVICE, NULL) < 0) {
+-			tc_err(priv, MSG_RX,
+-				"map RXOUT DMA descriptor failed\n");
+-			continue;
++		if (!desc->own) {
++			break;
+ 		}
+-		ptr = desc->data_ptr + desc->byte_off;
+-		mem = __va(ptr);
+-		skb = build_skb(mem, 0);
+-		if (!skb) {
+-			tc_err(priv, MSG_RX,
+-				"RXOUT build skb failed\n");
+-			kfree(mem);
+-			continue;
++
++		//dump_desc(desc, "rxout", rxout->idx);
++
++		// this is a pointer to a DS PKT buffer
++		ptr = (void *)__va(desc->data_ptr) + desc->byte_off;
++
++		dma_sync_single_for_cpu(pdev, desc->data_ptr, DMA_PACKET_SZ, DMA_FROM_DEVICE);
++
++		//dump_buf(ptr, desc->data_len);
++
++		//skb = netdev_alloc_skb_ip_align(g_plat_priv->netdev, desc->data_len);
++		skb = netdev_alloc_skb(g_plat_priv->netdev, desc->data_len);
++		if (unlikely(!skb)) {
++			tc_err(priv, MSG_RX, "RXOUT SKB allocation failed\n");
++			break;
+ 		}
+-		priv->tc_ops.recv(NULL, skb);
+-		ring_idx_inc(rxout, idx);
++
++		dst = skb_put(skb, desc->data_len);
++		memcpy(dst, ptr, desc->data_len);
++
++		//dma_sync_single_for_device(pdev, desc->data_ptr, DMA_PACKET_SZ, DMA_FROM_DEVICE);
++
++		priv->tc_ops.recv(g_plat_priv->netdev, skb);
++
++		desc->own = 0;
++
++		cnt++;
++		ring_idx_inc(rxout);
+ 	}
+ 
+ 	if (!cnt)
+-		tc_err(priv, MSG_RX, "RXOUT dummy interrupt: dbase: 0x%x, idx: %d, cnt: %d\n",
+-			(unsigned int)rxout->dbase_mem, rxout->idx, rxout->cnt);
++		tc_err(priv, MSG_RX, "RXOUT spurious interrupt\n");
+ 	else
+-		writel(cnt, rxout->umt_dst);
++		writel(cnt, rxout->umt_dst+0x28); // RXOUT_HD_ACCUM_SUB instead of RXOUT_HD_ACCUM_ADD
++
++	//pr_info("rxout received %d packets\n", cnt);
+ 
+-	pr_info("txout received %d packets\n", cnt);
+ 	return cnt;
+ }
+ 
+@@ -669,7 +876,6 @@
+ 	struct aca_ring *rxin = &priv->soc_rings.rxin;
+ 	struct dc_ep_dev *ep_dev = &tcpriv->ep_dev[rxout->ep_dev_idx];
+ 	int cnt;
+-	
+ 
+ 	cnt = rxout_action(tcpriv, rxout);
+ 	if (cnt)
+@@ -687,68 +893,83 @@
+ {
+ 	struct plat_priv *priv = g_plat_priv;
+ 	struct aca_ring *txin = &priv->soc_rings.txin;
++	int res;
+ 
+-	txin_action(priv->tc_priv, txin, skb, qid, type);
++	res = txin_action(priv->tc_priv, txin, skb, qid, type);
+ 
+-	return 0;
++	return res;
+ }
+ 
+ /* return virtual address */
+-static void *plat_mem_alloc(size_t size, enum tc_dir dir)
++static void *plat_mem_alloc(size_t size,
++		enum tc_dir dir, u32 *phyaddr)
+ {
+-	return kmalloc(size, GFP_KERNEL);
++	struct tc_priv *priv = g_plat_priv->tc_priv;
++	struct device *pdev = priv->ep_dev[0].dev;
++	void *mem;
++
++	mem = kmalloc(size, GFP_KERNEL);
++	if (!mem) {
++		return NULL;
++	}
++
++	*phyaddr = dma_map_single(pdev, mem, size, DMA_FROM_DEVICE);
++	if (unlikely(dma_mapping_error(pdev, *phyaddr))) {
++		tc_err(priv, MSG_INIT,
++			"plat_mem_alloc: DMA mapping error: buf: 0x%x, size: %d, dir: %d\n",
++			(u32)mem, size, dir);
++
++		kfree(mem);
++		return NULL;
++	}
++	//dma_unmap_single(pdev, *phyaddr, size, DMA_FROM_DEVICE);
++
++	return mem;
+ }
+ 
+-static void plat_mem_free(u32 phy_addr, enum tc_dir dir)
++static void plat_mem_free(u32 phyaddr, enum tc_dir dir)
+ {
+ 	void *mem;
+ 
+-	mem = (void * __force)__va(phy_addr);
++	mem = (void * __force)__va(phyaddr);
+ 	kfree(mem);
+ }
+ 
+-static void aca_soc_ring_init(struct tc_priv *priv,
+-			struct aca_ring *ring, u32 dnum, u32 dsize)
++static int ring_init(struct tc_priv *priv, struct aca_ring *ring, u32 dnum, u32 dsize)
+ {
++	struct device *pdev = priv->ep_dev[0].dev;
+ 	int size;
+-	struct device *pdev;
+ 
+ 	memset(ring, 0, sizeof(*ring));
+ 	ring->dnum = dnum;
++	ring->dsize = dsize;
++
++	if (ring->dnum == 0) {
++		return 0;
++	}
++
+ 	size = dsize * dnum;
+-	pdev = priv->ep_dev[0].dev;
+ 
+-	ring->dbase_mem = kmalloc(size, GFP_KERNEL);
++	ring->dbase_mem = dma_alloc_coherent(pdev, size, &(ring->dbase_phymem), GFP_KERNEL);
+ 	if (!ring->dbase_mem) {
+-		tc_err(priv, MSG_INIT, "Allocate SoC Ring fail: %d\n", dnum);
+-		return;
++		tc_err(priv, MSG_INIT, "Ring allocation failed: %d\n", dnum);
++		return -1;
+ 	}
+ 
+-	ring_mmap(ring->dbase_mem, size, DMA_FROM_DEVICE, &(ring->dbase_phymem));
+-	tc_dbg(priv, MSG_INIT, "ring: membase: 0x%x, phybase: 0x%x, dnum: %d\n",
+-		(u32)ring->dbase_mem, ring->dbase_phymem, ring->dnum);
+-
+-	size = sizeof(u32);
+-	ring->cnt_addr = kzalloc(size, GFP_KERNEL);
+-	if (!ring->cnt_addr) {
+-		tc_err(priv, MSG_INIT, "Allocate cumulative counter fail!\n");
+-		return;
+-	}
++	return 0;
++}
+ 
+-	ring_mmap(ring->cnt_addr, size, DMA_TO_DEVICE, &(ring->cnt_phyaddr));
+-	tc_dbg(priv, MSG_INIT, "ring: cumulative cnt addr: 0x%x, phy address: 0x%x\n",
+-		(u32)ring->cnt_addr, ring->cnt_phyaddr);
++#define ring_dnum(tcpriv, name1, name2) ((!tcpriv->param.name1##_dnum) ? name2##_DNUM : tcpriv->param.name1##_dnum)
+ 
+-	return;
+-}
++static void ring_free(struct tc_priv *priv, struct aca_ring *ring)
++{
++	struct device *pdev = priv->ep_dev[0].dev;
++
++	if (ring->dnum == 0) {
++		return;
++	}
+ 
+-#define ring_init(tcpriv, ring, name1, name2, num, size)	\
+-{								\
+-	if (!tcpriv->param.name1##_dnum)			\
+-		num = name2##_DNUM;				\
+-	else							\
+-		num = tcpriv->param.name1##_dnum;		\
+-	aca_soc_ring_init(tcpriv, ring, num, size);		\
++	dma_free_coherent(pdev, ring->dsize * ring->dnum, ring->dbase_mem, ring->dbase_phymem);
+ }
+ 
+ static irqreturn_t aca_rx_irq_handler(int irq, void *dev_id)
+@@ -777,39 +998,55 @@
+ 	return IRQ_HANDLED;
+ }
+ 
+-static void irq_init(struct tc_priv *priv, const char *dev_name)
++static void plat_irq_init(struct tc_priv *priv, const char *dev_name)
+ {
+ 	int ret;
+ 	int i;
+-	char name[IFNAMSIZ];
++	//char name[IFNAMSIZ];
+ 
+ 	for (i = 0; i < EP_MAX_NUM && i < priv->ep_num; i++) {
+-		sprintf(name, "%s%d", dev_name, i);
++		//snprintf(name, sizeof(name), "aca-rxo%d", i);
+ 
+ 		ret = devm_request_irq(priv->ep_dev[i].dev, priv->ep_dev[i].aca_rx_irq,
+-				aca_rx_irq_handler, 0, name, &priv->ep_dev[i]);
++				aca_rx_irq_handler, 0, "aca-rxo", &priv->ep_dev[i]);
+ 
+ 		if (ret) {
+ 			tc_err(priv, MSG_INIT,
+ 				"ACA RX IRQ request Fail!: irq: %d, ep_id: %d\n",
+ 				priv->ep_dev[i].aca_rx_irq, i);
+ 			//return;
+-		} 
++		}
++
++		//snprintf(name, sizeof(name), "aca-txo%d", i);
+ 
+ 		ret = devm_request_irq(priv->ep_dev[i].dev, priv->ep_dev[i].aca_tx_irq,
+-				aca_tx_irq_handler, 0, name, &priv->ep_dev[i]);
++				aca_tx_irq_handler, 0, "aca-txo", &priv->ep_dev[i]);
+ 
+ 		if (ret) {
+ 			tc_err(priv, MSG_INIT,
+ 				"ACA TX IRQ request Fail!: irq: %d, ep_id: %d\n",
+ 				priv->ep_dev[i].aca_tx_irq, i);
+ 			//return;
+-		} 
++		}
+ 	}
+ 
+ 	return;
+ }
+ 
++static void plat_irq_free(struct tc_priv *priv)
++{
++	int i;
++
++	for (i = 0; i < EP_MAX_NUM && i < priv->ep_num; i++) {
++
++		/* Unregister RX irq handler */
++		devm_free_irq(priv->ep_dev[i].dev, priv->ep_dev[i].aca_rx_irq, &priv->ep_dev[i]);
++
++		/* Unregister TX irq handler */
++		devm_free_irq(priv->ep_dev[i].dev, priv->ep_dev[i].aca_tx_irq, &priv->ep_dev[i]);
++	}
++}
++
+ /**
+  * Decide txin/rxout queue size
+  * Create a tx/rx queue
+@@ -819,29 +1056,48 @@
+ 	struct tc_priv *tcpriv;
+ 	struct aca_ring_grp *soc_rings;
+ 	struct aca_ring *ring;
+-	int size;
+ 	u32 dnum;
++	int i;
++	int ret = 0;
+ 
+ 	tcpriv = priv->tc_priv;
+ 
+-	size = sizeof(struct dma_desc);
+ 	soc_rings = &priv->soc_rings;
+ 
++	// this needs a size of at least the TXIN ring size plus the internal upstream buffers (seemingly QoSQ + OutQ)
++	ret |= txbuflist_init(&soc_rings->txbuflist, 512);
++
+ 	/* txin ring */
+ 	ring = &soc_rings->txin;
+-	ring_init(tcpriv, ring, txin, TXIN, dnum, size);
++	dnum = ring_dnum(tcpriv, txin, TXIN);
++	ret |= txlist_init(&soc_rings->txlist, dnum);
++	ret |= ring_init(tcpriv, ring, dnum, sizeof(struct dma_tx_desc));
+ 
+ 	/* txout ring */
+ 	ring = &soc_rings->txout;
+-	ring_init(tcpriv, ring, txout, TXOUT, dnum, size);
++	dnum = ring_dnum(tcpriv, txout, TXOUT);
++	ret |= ring_init(tcpriv, ring, dnum, sizeof(u32));
++
+ 	/* rxin ring */
+ 	ring = &soc_rings->rxin;
+-	ring_init(tcpriv, ring, rxin, RXIN, dnum, size);
++	dnum = ring_dnum(tcpriv, rxin, RXIN);
++	ret |= ring_init(tcpriv, ring, dnum, sizeof(struct dma_rx_desc));
++
+ 	/* rxout ring */
+ 	ring = &soc_rings->rxout;
+-	ring_init(tcpriv, ring, rxout, RXOUT, dnum, size);
++	dnum = ring_dnum(tcpriv, rxout, RXOUT);
++	ret |= ring_init(tcpriv, ring, dnum, sizeof(struct dma_rx_desc));
+ 
+-	return 0;
++	for (i = 0; i < EP_MAX_NUM && i < tcpriv->ep_num; i++) {
++
++ 		/* Enable RX interrupt */
++ 		tcpriv->ep_dev[i].hw_ops->icu_en(&tcpriv->ep_dev[i], ACA_HOSTIF_RX);
++
++ 		/* Enable TX interrupt */
++ 		tcpriv->ep_dev[i].hw_ops->icu_en(&tcpriv->ep_dev[i], ACA_HOSTIF_TX);
++ 	}
++
++	return ret;
+ }
+ 
+ /**
+@@ -850,6 +1106,27 @@
+  */
+ static void plat_dp_exit(struct plat_priv *priv)
+ {
++	struct tc_priv *tcpriv = priv->tc_priv;
++	struct aca_ring_grp *soc_rings = &priv->soc_rings;
++	int i;
++
++	for (i = 0; i < EP_MAX_NUM && i < tcpriv->ep_num; i++) {
++
++		/* Disable RX interrupt */
++		tcpriv->ep_dev[i].hw_ops->icu_mask(&tcpriv->ep_dev[i], ACA_HOSTIF_RX);
++
++		/* Disable TX interrupt */
++		tcpriv->ep_dev[i].hw_ops->icu_mask(&tcpriv->ep_dev[i], ACA_HOSTIF_TX);
++	}
++
++	ring_free(tcpriv, &soc_rings->txin);
++	ring_free(tcpriv, &soc_rings->txout);
++	ring_free(tcpriv, &soc_rings->rxin);
++	ring_free(tcpriv, &soc_rings->rxout);
++
++	txlist_free(&soc_rings->txlist);
++	txbuflist_free(&soc_rings->txbuflist);
++
+ 	return;
+ }
+ 
+@@ -858,44 +1135,42 @@
+ 	struct plat_priv *priv = g_plat_priv;
+ 
+ 	/* TXIN */
+-	cfg->txin_dbase = priv->soc_rings.txin.dbase_phymem;
+-	cfg->txin_dnum = priv->soc_rings.txin.dnum;
+-	cfg->txin_desc_dwsz = DW_SZ(struct dma_desc);
+-	cfg->txin_cnt_phyaddr = priv->soc_rings.txin.cnt_phyaddr;
++	cfg->txin.soc_phydbase = priv->soc_rings.txin.dbase_phymem;
++	cfg->txin.soc_dnum = priv->soc_rings.txin.dnum;
++	cfg->txin.soc_desc_dwsz = DW_SZ(struct dma_tx_desc);
+ 	/* TXOUT */
+-	cfg->txout_dbase = priv->soc_rings.txout.dbase_phymem;
+-	cfg->txout_dnum = priv->soc_rings.txout.dnum;
+-	cfg->txout_desc_dwsz = DW_SZ(struct dma_desc);
+-	cfg->txout_cnt_phyaddr = priv->soc_rings.txout.cnt_phyaddr;
++	cfg->txout.soc_phydbase = priv->soc_rings.txout.dbase_phymem;
++	cfg->txout.soc_dnum = priv->soc_rings.txout.dnum;
++	cfg->txout.soc_desc_dwsz = DW_SZ(u32);
+ 	/* RXOUT */
+-	cfg->rxout_dbase = priv->soc_rings.rxout.dbase_phymem;
+-	cfg->rxout_dnum = priv->soc_rings.rxout.dnum;
+-	cfg->rxout_desc_dwsz = DW_SZ(struct dma_desc);
+-	cfg->rxout_cnt_phyaddr = priv->soc_rings.rxout.cnt_phyaddr;
++	cfg->rxout.soc_phydbase = priv->soc_rings.rxout.dbase_phymem;
++	cfg->rxout.soc_dnum = priv->soc_rings.rxout.dnum;
++	cfg->rxout.soc_desc_dwsz = DW_SZ(struct dma_rx_desc);
+ 	/* RXIN */
+-	cfg->rxin_dbase = priv->soc_rings.rxin.dbase_phymem;
+-	cfg->rxin_dnum = priv->soc_rings.rxin.dnum;
+-	cfg->rxin_desc_dwsz = DW_SZ(struct dma_desc);
+-	cfg->rxin_cnt_phyaddr = priv->soc_rings.rxin.cnt_phyaddr;
++	cfg->rxin.soc_phydbase = priv->soc_rings.rxin.dbase_phymem;
++	cfg->rxin.soc_dnum = priv->soc_rings.rxin.dnum;
++	cfg->rxin.soc_desc_dwsz = DW_SZ(struct dma_rx_desc);
+ 
+ 	tc_info(priv->tc_priv, MSG_INIT,
+ 		"id: %d, txin(0x%x: %d, 0x%x), txout(0x%x: %d, 0x%x), rxin(0x%x: %d, 0x%x), rxout(0x%x: %d, 0x%x)\n",
+-		id, cfg->txin_dbase, cfg->txin_dnum, cfg->txin_cnt_phyaddr,
+-		cfg->txout_dbase, cfg->txout_dnum, cfg->txout_cnt_phyaddr,
+-		cfg->rxin_dbase, cfg->rxout_dnum, cfg->rxin_cnt_phyaddr,
+-		cfg->rxout_dbase, cfg->rxout_dnum, cfg->rxout_cnt_phyaddr);
++		id, cfg->txin.soc_phydbase, cfg->txin.soc_dnum, cfg->txin.soc_cnt_phyaddr,
++		cfg->txout.soc_phydbase, cfg->txout.soc_dnum, cfg->txout.soc_cnt_phyaddr,
++		cfg->rxin.soc_phydbase, cfg->rxin.soc_dnum, cfg->rxin.soc_cnt_phyaddr,
++		cfg->rxout.soc_phydbase, cfg->rxout.soc_dnum, cfg->rxout.soc_cnt_phyaddr);
+ 
+ 	return 0;
+ }
+ 
+-static int plat_open(struct net_device *pdev, char *dev_name,
+-		int *subif, int flag)
++static int plat_open(struct net_device *pdev, const char *dev_name,
++		int id, int flag)
+ {
++	g_plat_priv->netdev = pdev;
++
+ 	return 0;
+ }
+ 
+-static void plat_close(struct net_device *pdev, char *dev_name,
+-		int subif, int flag)
++static void plat_close(struct net_device *pdev, const char *dev_name,
++		int flag)
+ {
+ 	return;
+ }
+@@ -971,7 +1246,6 @@
+ static int plat_get_mib(struct net_device *pdev,
+ 			struct rtnl_link_stats64 *stat)
+ {
+-	pr_info("%s is not supported\n", __func__);
+ 	return -ENOTSUPP;
+ }
+ 
+@@ -1181,8 +1455,8 @@
+ 	INIT_WORK(&priv->req_work.work, plat_tc_req_workqueue);
+ 	tasklet_init(&txout_task, plat_txout_tasklet, 0);
+ 	tasklet_init(&rxout_task, plat_rxout_tasklet, 0);
+-	irq_init(tc_priv, drv_name);
+-	//tasklet_init(&priv->coc.coc_task, plat_coc_tasklet, 0);
++	plat_irq_init(tc_priv, drv_name);
++
+ 	plat_tc_ops_setup(tc_priv);
+ 	plat_dsl_ops_setup();
+ 
+@@ -1201,8 +1475,14 @@
+ 
+ void platform_exit(void)
+ {
+-	//tasklet_kill(&g_plat_priv->coc.coc_task);
++	struct tc_priv *tcpriv = plat_to_tcpriv();
++
+ 	plat_dp_exit(g_plat_priv);
++
++	plat_irq_free(tcpriv);
++	tasklet_kill(&txout_task);
++	tasklet_kill(&rxout_task);
++
+ 	g_plat_priv = NULL;
+ }
+ 
