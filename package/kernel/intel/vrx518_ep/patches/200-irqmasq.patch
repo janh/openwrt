@@ -1,0 +1,11 @@
+--- a/misc.c
++++ b/misc.c
+@@ -68,7 +68,7 @@ void dc_ep_icu_disable(struct dc_ep_priv
+ 
+ void dc_ep_icu_dis_intr(struct dc_ep_priv *priv, u32 bits)
+ {
+-	wr32_mask(~bits, 0, ICU_IMER);
++	wr32_mask(bits, 0, ICU_IMER);
+ }
+ 
+ void dc_ep_icu_en_intr(struct dc_ep_priv *priv, u32 bits)

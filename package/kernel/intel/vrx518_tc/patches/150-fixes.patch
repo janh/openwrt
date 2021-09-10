@@ -1,0 +1,112 @@
+--- a/dcdp/atm_tc.c
++++ b/dcdp/atm_tc.c
+@@ -603,7 +603,11 @@
+ 	cfg = &priv->tc_priv->cfg;
+ 
+ 	txin = &param.aca_txin;
++#if defined(__LITTLE_ENDIAN)
++	txin->byteswap = 0;
++#else
+ 	txin->byteswap = 1;
++#endif
+ 	txin->hd_size_in_dw = cfg->txin.soc_desc_dwsz;
+ 	txin->pd_desc_base = SB_XBAR_ADDR(__ACA_TX_IN_PD_LIST_BASE);
+ 	txin->pd_desc_num = __ACA_TX_IN_PD_LIST_NUM;
+@@ -625,7 +629,11 @@
+ 		txin->soc_cmlt_cnt_addr);
+ 
+ 	txout = &param.aca_txout;
++#if defined(__LITTLE_ENDIAN)
++	txout->byteswap = 0;
++#else
+ 	txout->byteswap = 1;
++#endif
+ 	txout->hd_size_in_dw = cfg->txout.soc_desc_dwsz;
+ 	txout->pd_desc_base = SB_XBAR_ADDR(__ACA_TX_OUT_PD_LIST_BASE);
+ 	txout->pd_desc_num = __ACA_TX_OUT_PD_LIST_NUM;
+@@ -647,7 +655,11 @@
+ 		txout->soc_cmlt_cnt_addr);
+ 
+ 	rxout = &param.aca_rxout;
++#if defined(__LITTLE_ENDIAN)
++	rxout->byteswap = 0;
++#else
+ 	rxout->byteswap = 1;
++#endif
+ 	rxout->hd_size_in_dw = cfg->rxout.soc_desc_dwsz;
+ 	rxout->pd_desc_base = SB_XBAR_ADDR(__ACA_RX_OUT_PD_LIST_BASE);
+ 	rxout->pd_desc_num = __ACA_RX_OUT_PD_LIST_NUM;
+@@ -669,7 +681,11 @@
+ 		rxout->soc_cmlt_cnt_addr);
+ 
+ 	rxin = &param.aca_rxin;
++#if defined(__LITTLE_ENDIAN)
++	rxin->byteswap = 0;
++#else
+ 	rxin->byteswap = 1;
++#endif
+ 	rxin->hd_size_in_dw = cfg->rxin.soc_desc_dwsz;
+ 	rxin->pd_desc_base = SB_XBAR_ADDR(__RX_IN_PD_DES_LIST_BASE);
+ 	rxin->pd_desc_num = __ACA_RX_IN_PD_LIST_NUM;
+--- a/dcdp/ptm_tc.c
++++ b/dcdp/ptm_tc.c
+@@ -635,9 +635,9 @@
+ 	const char macaddr[ETH_ALEN]
+ 		= {0xAC, 0x9A, 0x96, 0x11, 0x22, 0x33};
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4,8,0)
+-	dev = alloc_netdev_mq(sizeof(*ptm_tc), "ptm%d", ptm_setup, 4);
++	dev = alloc_netdev(sizeof(*ptm_tc), "ptm%d", ptm_setup);
+ #else
+-	dev = alloc_netdev_mq(sizeof(*ptm_tc), "ptm%d",  NET_NAME_ENUM, ptm_setup, 4);
++	dev = alloc_netdev(sizeof(*ptm_tc), "ptm%d", NET_NAME_ENUM, ptm_setup);
+ #endif
+ 	if (!dev) {
+ 		tc_dbg(tc_priv, MSG_INIT, "Cannot alloc net device\n");
+@@ -2331,7 +2331,11 @@
+ 	cfg = &priv->tc_priv->cfg;
+ 
+ 	txin = &param.aca_txin;
++#if defined(__LITTLE_ENDIAN)
++	txin->byteswap = 0;
++#else
+ 	txin->byteswap = 1;
++#endif
+ 	txin->hd_size_in_dw = cfg->txin.soc_desc_dwsz;
+ 	txin->pd_desc_base = SB_XBAR_ADDR(__ACA_TX_IN_PD_LIST_BASE);
+ 	txin->pd_desc_num = __ACA_TX_IN_PD_LIST_NUM;
+@@ -2354,7 +2358,11 @@
+ 		txin->soc_cmlt_cnt_addr);
+ 
+ 	txout = &param.aca_txout;
++#if defined(__LITTLE_ENDIAN)
++	txout->byteswap = 0;
++#else
+ 	txout->byteswap = 1;
++#endif
+ 	txout->hd_size_in_dw = cfg->txout.soc_desc_dwsz;
+ 	if (priv->tc_priv->param.cdma_desc_loc == LOC_IN_FPI)
+ 		txout->pd_desc_base = sb_r32(__TX_OUT_SHADOW_PTR) - phybase;
+@@ -2380,7 +2388,11 @@
+ 		txout->soc_cmlt_cnt_addr);
+ 
+ 	rxout = &param.aca_rxout;
++#if defined(__LITTLE_ENDIAN)
++	rxout->byteswap = 0;
++#else
+ 	rxout->byteswap = 1;
++#endif
+ 	rxout->hd_size_in_dw = cfg->rxout.soc_desc_dwsz;
+ 	if (priv->tc_priv->param.cdma_desc_loc == LOC_IN_FPI)
+ 		rxout->pd_desc_base = sb_r32(__RX_OUT_SHADOW_PTR) - phybase;
+@@ -2406,7 +2418,11 @@
+ 		rxout->soc_cmlt_cnt_addr);
+ 
+ 	rxin = &param.aca_rxin;
++#if defined(__LITTLE_ENDIAN)
++	rxin->byteswap = 0;
++#else
+ 	rxin->byteswap = 1;
++#endif
+ 	rxin->hd_size_in_dw = cfg->rxin.soc_desc_dwsz;
+ 	rxin->pd_desc_base = SB_XBAR_ADDR(__RX_IN_PD_DES_LIST_BASE);
+ 	rxin->pd_desc_num = __ACA_RX_IN_PD_LIST_NUM;
