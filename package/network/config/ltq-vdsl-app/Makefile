@@ -8,14 +8,17 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=ltq-vdsl-app
-PKG_VERSION:=4.17.18.6
+PKG_VERSION:=4.23.1
 PKG_RELEASE:=$(AUTORELEASE)
 PKG_BASE_NAME:=dsl_cpe_control
-PKG_SOURCE:=$(PKG_BASE_NAME)_vrx-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=@OPENWRT
-PKG_HASH:=da8bb929526a61aea0e153ef524331fcd472a1ebbc6d88ca017735a4f82ece02
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://gitlab.com/prpl-foundation/intel/dsl_cpe_control.git
+PKG_SOURCE_DATE:=2021-09-30
+PKG_SOURCE_VERSION:=42c32b6a4e01f7ecdc884fec1c696d15f5811a4f
+PKG_MIRROR_HASH:=c27dc5e679b6b5f306b37ba9ad606dc270a3c9002116bf79da6dc90b43cf9ec8
+PKG_SOURCE_SUBDIR:=$(PKG_BASE_NAME)-$(PKG_VERSION)
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_BASE_NAME)-$(PKG_VERSION)
-PKG_LICENSE:=BSD-2-Clause
+PKG_LICENSE:=GPL-2.0 BSD-2-Clause
 
 PKG_BUILD_DEPENDS:=ltq-vdsl
 
@@ -44,9 +47,10 @@ endef
 #
 # If you change them, you need to change them for the ltq-vdsl-app as well
 VDSL_APP_CFLAGS = \
-	-DMAX_CLI_PIPES=1 \
 	-DMEI_SUPPORT_DEBUG_STREAMS=1 \
 	-DMEI_SUPPORT_OPTIMIZED_FW_DL=1
+
+VDSL_APP_CFLAGS += -DMAX_CLI_PIPES=1
 
 CONFIGURE_ARGS += \
 	--enable-vrx \
@@ -58,8 +62,7 @@ CONFIGURE_ARGS += \
 	--enable-ifxos-library="-I$(STAGING_DIR)/usr/lib" \
 	--enable-add-appl-cflags="$(VDSL_APP_CFLAGS)"  \
 	--enable-debug \
-	--disable-dti \
-	--with-channels-per-line="1"
+	--disable-dti
 
 CONFIGURE_ARGS += \
 	--enable-model=full \
