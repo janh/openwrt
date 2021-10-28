@@ -1,6 +1,6 @@
 --- a/src/include/drv_dsl_cpe_os_linux.h
 +++ b/src/include/drv_dsl_cpe_os_linux.h
-@@ -33,6 +33,9 @@
+@@ -36,6 +36,9 @@
  #endif
  
  #include <linux/sched.h>

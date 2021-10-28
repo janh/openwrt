@@ -8,14 +8,17 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=ltq-vdsl-vr9
-PKG_VERSION:=4.17.18.6
-PKG_RELEASE:=6
+PKG_VERSION:=4.23.1
+PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_BASE_NAME:=drv_dsl_cpe_api
-PKG_SOURCE:=$(PKG_BASE_NAME)_vrx-$(PKG_VERSION).tar.gz
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_BASE_NAME)-$(PKG_VERSION)
-PKG_SOURCE_URL:=@OPENWRT
-PKG_HASH:=b4966a60653acc49254b168c6cc9c49eb36c54548e763617788aa4f252a29f21
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://gitlab.com/prpl-foundation/intel/dsl_cpe_api.git
+PKG_SOURCE_DATE:=2021-09-30
+PKG_SOURCE_VERSION:=b044661e111730928e9da35d4680eebd5500d490
+PKG_MIRROR_HASH:=ace62fd1cbff218a9448ba7d0daf834738d6d77ef02f2e9730429948e518e973
+PKG_SOURCE_SUBDIR:=$(PKG_BASE_NAME)-$(PKG_VERSION)
 PKG_LICENSE:=GPL-2.0 BSD-2-Clause
 PKG_LICENSE_FILES:=LICENSE
 
@@ -46,15 +49,14 @@ MAKE_FLAGS += \
 	SHELL="$(BASH)"
 
 CONFIGURE_ARGS += --enable-kernel-include="$(LINUX_DIR)/include" \
-	--with-max-device="1" \
-	--with-lines-per-device="1" \
-	--with-channels-per-line="1" \
 	--enable-vrx \
 	--enable-vrx-device=vr9 \
+	--enable-firmware-r9 \
+	--enable-dsl-filter-detection=no \
 	--enable-ifxos \
 	--enable-ifxos-include="-I$(STAGING_DIR)/usr/include/ifxos" \
 	--enable-driver-include="-I$(STAGING_DIR)/usr/include/vdsl" \
-	--enable-add-drv-cflags="-DMODULE -DINCLUDE_DSL_ATM_PTM_INTERFACE_SUPPORT" \
+	--enable-add-drv-cflags="-DDSL_DRV_ATM_PTM_INTERFACE_ENABLE=1" \
 	--enable-linux-26 \
 	--enable-kernelbuild="$(LINUX_DIR)" \
 	--enable-debug-prints=no \
