@@ -8,14 +8,17 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=ltq-vdsl-vr9-mei
-PKG_VERSION:=1.5.17.6
-PKG_RELEASE:=4
+PKG_VERSION:=1.11.1
+PKG_RELEASE:=$(AUTORELEASE)
 
 PKG_BASE_NAME:=drv_mei_cpe
-PKG_SOURCE:=$(PKG_BASE_NAME)-$(PKG_VERSION).tar.gz
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_BASE_NAME)-$(PKG_VERSION)
-PKG_SOURCE_URL:=@OPENWRT
-PKG_HASH:=94f6904364348b7f74087e721968abc28b2564fb9bd8899aa930d36490387662
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://gitlab.com/prpl-foundation/intel/dsl_cpe_mei.git
+PKG_SOURCE_DATE:=2021-09-30
+PKG_SOURCE_VERSION:=73d0147a0e51216053d64eb747cc1a55581393ef
+PKG_MIRROR_HASH:=31d9d0140e973d1b9f51846550854f1faaca537b52a6d86c50c473441e7a5c5f
+PKG_SOURCE_SUBDIR:=$(PKG_BASE_NAME)-$(PKG_VERSION)
 PKG_FIXUP:=autoreconf
 PKG_FLAGS:=nonshared
 PKG_MAINTAINER:=John Crispin <john@phrozen.org>
@@ -68,16 +71,15 @@ MEI_DRV_CFLAGS = \
 CONFIGURE_ARGS += \
 	--enable-kernelincl="$(LINUX_DIR)/include" \
 	--enable-device=vr9 \
-	--with-max-device=1 \
-	--with-lines-per-device=1 \
-	--enable-debug \
-	--enable-error_print \
+	--enable-debug=no \
+	--enable-error-print=no \
 	--enable-ifxos-include="-I$(STAGING_DIR)/usr/include/ifxos/" \
 	--enable-ifxos-library="-L$(STAGING_DIR)/usr/lib" \
 	--enable-add_drv_cflags="$(MEI_DRV_CFLAGS)" \
 	--enable-linux-26 \
 	--enable-kernelbuild="$(LINUX_DIR)" \
 	--enable-drv_test_appl=yes \
+	--disable-ppa-callbacks-tc \
 	ARCH=$(LINUX_KARCH)
 
 define Build/InstallDev
