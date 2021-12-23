@@ -1,0 +1,13 @@
+--- a/src/drv_mei_cpe_linux.c
++++ b/src/drv_mei_cpe_linux.c
+@@ -2708,7 +2708,9 @@ IFX_int32_t MEI_IoctlInitDevice(
+    if (MEI_DEVICE_CFG_IS_PLATFORM(e_MEI_DEV_PLATFORM_CONFIG_VR9))
+    {
+       pInitDev->meiBaseAddr = MEI_DEVICE_CFG_VALUE_GET(nBaseAddr);
+-      pInitDev->usedIRQ     = MEI_DEVICE_CFG_VALUE_GET(nIrq);
++      //pInitDev->usedIRQ     = MEI_DEVICE_CFG_VALUE_GET(nIrq);
++      /* always use active polling, due to concurrency issues with the interrupt handler */
++      pInitDev->usedIRQ     = 99;
+ 
+       reinit = e_MEI_ERR_ALREADY_DONE;
+    }
