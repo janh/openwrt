@@ -312,10 +312,18 @@ start_service() {
 			${mode} \
 			${tc_layer} \
 			$autoboot
+	procd_set_param pidfile /var/run/vdsl_cpe_control.pid
 	procd_close_instance
 }
 
 stop_service() {
+	local pid="$(cat /var/run/vdsl_cpe_control.pid)"
+
+	[ -f "/proc/${pid}/status" ] && {
+		dsl_cpe_pipe.sh acos 1 1 1 0 0 0 > /dev/null
+		dsl_cpe_pipe.sh acs 2 > /dev/null
+	}
+
 	DSL_NOTIFICATION_TYPE="DSL_INTERFACE_STATUS" \
 	DSL_INTERFACE_STATUS="DOWN" \
 		/sbin/dsl_notify.sh
