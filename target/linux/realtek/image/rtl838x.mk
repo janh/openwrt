@@ -170,3 +170,13 @@ define Device/zyxel_gs1900-24hp-v2
   ZYXEL_VERS := ABTP
 endef
 TARGET_DEVICES += zyxel_gs1900-24hp-v2
+
+define Device/hpe_1920-16g
+  SOC := rtl8382
+  DEVICE_VENDOR := HPE
+  DEVICE_MODEL := 1920-16G (JG923A)
+  KERNEL := kernel-bin | append-dtb | relocate-kernel
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | relocate-kernel
+  IMAGE/sysupgrade.bin :=
+endef
+TARGET_DEVICES += hpe_1920-16g
