@@ -31,7 +31,18 @@ extern struct rtl83xx_soc_info soc_info;
 static void __init rtl838x_setup(void)
 {
 	/* Setup System LED. Bit 15 then allows to toggle it */
-	sw_w32_mask(0, 3 << 16, RTL838X_LED_GLB_CTRL);
+	/*
+	 * does not affect the actual LED on this device, instead any
+	 * non-blinking value causes the device to reboot about a second
+	 * later (value set by the bootloader: 1)
+	 */
+	//sw_w32_mask(0, 3 << 16, RTL838X_LED_GLB_CTRL);
+
+	// turn actual Power LED off
+	//sw_w32_mask(0xF, 0xD, 0xA00C);
+
+	// turn actual Power LED on (already done by bootloader)
+	//sw_w32_mask(0xF, 0x8, 0xA00C);
 }
 
 static void __init rtl839x_setup(void)

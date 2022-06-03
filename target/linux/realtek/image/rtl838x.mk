@@ -170,3 +170,16 @@ define Device/zyxel_gs1900-24hp-v2
   ZYXEL_VERS := ABTP
 endef
 TARGET_DEVICES += zyxel_gs1900-24hp-v2
+
+define Device/hpe_1920-16g
+  SOC := rtl8382
+  DEVICE_VENDOR := HPE
+  DEVICE_MODEL := 1920-16G (JG923A)
+  KERNEL_SIZE := 8096k
+  ROOTFS_SIZE := 21440k
+  BLOCKSIZE := 64k
+  KERNEL := kernel-bin | append-dtb | relocate-kernel
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | relocate-kernel
+  IMAGE/sysupgrade.bin/squashfs := append-rootfs | pad-rootfs | check-size $$$$(ROOTFS_SIZE) | sysupgrade-tar rootfs=$$$$@ | append-metadata
+endef
+TARGET_DEVICES += hpe_1920-16g
