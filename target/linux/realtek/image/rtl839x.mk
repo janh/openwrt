@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+define Device/hpe_1920-48g
+  $(Device/hpe_1920)
+  SOC := rtl8393
+  DEVICE_MODEL := 1920-48G (JG927A)
+  H3C_DEVICE_ID := 0x0001002a
+endef
+TARGET_DEVICES += hpe_1920-48g
+
 define Device/zyxel_gs1900-48
   SOC := rtl8393
   IMAGE_SIZE := 13952k
