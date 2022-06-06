@@ -31,13 +31,32 @@ extern struct rtl83xx_soc_info soc_info;
 static void __init rtl838x_setup(void)
 {
 	/* Setup System LED. Bit 15 then allows to toggle it */
-	sw_w32_mask(0, 3 << 16, RTL838X_LED_GLB_CTRL);
+	/*
+	 * does not affect the actual LED on HPE 1920, instead any
+	 * non-blinking value causes the device to reboot about a second
+	 * later due to hardware watchdog
+	 * (value set by the bootloader: 1)
+	 */
+	//sw_w32_mask(0, 3 << 16, RTL838X_LED_GLB_CTRL);
+
+	// turn actual Power LED off
+	//sw_w32_mask(0xF, 0xD, 0xA00C);
+
+	// turn actual Power LED on (already done by bootloader)
+	//sw_w32_mask(0xF, 0x8, 0xA00C);
 }
 
 static void __init rtl839x_setup(void)
 {
 	/* Setup System LED. Bit 14 of RTL839X_LED_GLB_CTRL then allows to toggle it */
-	sw_w32_mask(0, 3 << 15, RTL839X_LED_GLB_CTRL);
+	/* should behave similar to RTL838x for HPE 1920 */
+	//sw_w32_mask(0, 3 << 15, RTL839X_LED_GLB_CTRL);
+
+	// turn actual Power LED off
+	//sw_w32_mask(0x20000, 0x0, 0x350C);
+
+	// turn actual Power LED on (should already be done by bootloader)
+	//sw_w32_mask(0x0, 0x20000, 0x350C);
 }
 
 static void __init rtl930x_setup(void)
