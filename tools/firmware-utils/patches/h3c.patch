@@ -1,0 +1,12 @@
+diff -ru a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2022-06-04 21:11:32.799329828 +0200
++++ b/CMakeLists.txt	2022-06-04 21:12:08.786083563 +0200
+@@ -65,6 +65,8 @@
+ FW_UTIL(mkedimaximg "" "" "")
+ FW_UTIL(mkfwimage "" "-Wextra -D_FILE_OFFSET_BITS=64" "${ZLIB_LIBRARIES}")
+ FW_UTIL(mkfwimage2 "" "" "${ZLIB_LIBRARIES}")
++FW_UTIL(mkh3cimg "" "" "")
++FW_UTIL(mkh3cvfs "" "" "")
+ FW_UTIL(mkheader_gemtek "" "" "${ZLIB_LIBRARIES}")
+ FW_UTIL(mkhilinkfw "" "" "${OPENSSL_CRYPTO_LIBRARIES}")
+ FW_UTIL(mkmerakifw src/sha1.c "" "")
