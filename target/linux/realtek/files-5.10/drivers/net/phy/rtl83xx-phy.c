@@ -10,6 +10,7 @@
 #include <linux/netdevice.h>
 #include <linux/firmware.h>
 #include <linux/crc32.h>
+#include <linux/sfp.h>
 
 #include <asm/mach-rtl838x/mach-rtl83xx.h>
 #include "rtl83xx-phy.h"
@@ -3658,6 +3659,11 @@ int rtl931x_link_sts_get(u32 sds)
 	return sts1;
 }
 
+static const struct sfp_upstream_ops rtl8214fc_sfp_ops = {
+	.attach = phy_sfp_attach,
+	.detach = phy_sfp_detach,
+};
+
 static int rtl8214fc_phy_probe(struct phy_device *phydev)
 {
 	struct device *dev = &phydev->mdio.dev;
@@ -3681,7 +3687,7 @@ static int rtl8214fc_phy_probe(struct phy_device *phydev)
 			return ret;
 	}
 
-	return 0;
+	return phy_sfp_probe(phydev, &rtl8214fc_sfp_ops);
 }
 
 static int rtl8214c_phy_probe(struct phy_device *phydev)
