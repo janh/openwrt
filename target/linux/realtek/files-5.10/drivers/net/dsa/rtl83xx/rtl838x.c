@@ -1794,6 +1794,8 @@ irqreturn_t rtl838x_switch_irq(int irq, void *dev_id)
 	for (i = 0; i < 28; i++) {
 		if (ports & BIT(i)) {
 			link = sw_r32(RTL838X_MAC_LINK_STS);
+			link = sw_r32(RTL838X_MAC_LINK_STS);
+			pr_debug("rtl838x_switch_irq port %d link val %x -> %x\n", i, link, link & BIT(i));
 			if (link & BIT(i))
 				dsa_port_phylink_mac_change(ds, i, true);
 			else
