@@ -1810,6 +1810,7 @@ int rtl838x_smi_wait_op(int timeout)
 	do {
 		timeout--;
 		udelay(10);
+		cond_resched();
 	} while ((sw_r32(RTL838X_SMI_ACCESS_PHY_CTRL_1) & 0x1) && (timeout >= 0));
 	if (timeout <= 0)
 		return -1;
