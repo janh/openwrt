@@ -49,7 +49,7 @@ void __init device_tree_init(void)
 	unflatten_and_copy_device_tree();
 }
 
-static void __init prom_init_cmdline(void)
+/*static void __init prom_init_cmdline(void)
 {
 	int argc = fw_arg0;
 	char **argv = (char **) KSEG1ADDR(fw_arg1);
@@ -66,7 +66,7 @@ static void __init prom_init_cmdline(void)
 		}
 	}
 	pr_info("Kernel command line: %s\n", arcs_cmdline);
-}
+}*/
 
 void __init identify_rtl9302(void)
 {
@@ -191,7 +191,7 @@ void __init prom_init(void)
 		mips_cpc_probe();
 	}
 
-	prom_init_cmdline();
+	//prom_init_cmdline(); // TODO???
 
 #ifdef  CONFIG_MIPS_CPS
 	if (!register_cps_smp_ops()) {
