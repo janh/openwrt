@@ -1306,6 +1306,7 @@ static int rtl8380_configure_rtl8214fc(struct phy_device *phydev)
 	u32 *rtl8380_rtl8214fc_perport;
 	u32 phy_id;
 	u32 val;
+	u32 ver;
 
 	val = phy_read(phydev, 2);
 	phy_id = val << 16;
@@ -1338,7 +1339,10 @@ static int rtl8380_configure_rtl8214fc(struct phy_device *phydev)
 
 	/* detect phy version */
 	phy_write_paged(phydev, RTL83XX_PAGE_RAW, 27, 0x0004);
-	val = phy_read_paged(phydev, RTL83XX_PAGE_RAW, 28);
+	ver = phy_read_paged(phydev, RTL83XX_PAGE_RAW, 28);
+
+	if (ver != 1)
+		phydev_err(phydev, "RTL8214FC version %d not supported.\n", ver);
 
 	val = phy_read(phydev, 16);
 	if (val & (1 << 11))
