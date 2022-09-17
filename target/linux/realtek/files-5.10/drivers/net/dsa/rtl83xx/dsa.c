@@ -1723,6 +1723,9 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 	mutex_lock(&priv->reg_mutex);
 
 	for (i = 0; i < priv->fib_entries; i++) {
+		if (i % 1024 == 0)
+			cond_resched();
+
 		priv->r->read_l2_entry_using_hash(i >> 2, i & 0x3, &e);
 
 		if (!e.valid)
