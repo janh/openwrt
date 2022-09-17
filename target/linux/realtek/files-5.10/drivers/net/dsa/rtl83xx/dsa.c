@@ -1536,24 +1536,24 @@ static int rtl83xx_vlan_del(struct dsa_switch *ds, int port,
 
 static void dump_l2_entry(struct rtl838x_l2_entry *e)
 {
-	pr_info("MAC: %02x:%02x:%02x:%02x:%02x:%02x vid: %d, rvid: %d, port: %d, valid: %d\n",
+	pr_debug("MAC: %02x:%02x:%02x:%02x:%02x:%02x vid: %d, rvid: %d, port: %d, valid: %d\n",
 		e->mac[0], e->mac[1], e->mac[2], e->mac[3], e->mac[4], e->mac[5],
 		e->vid, e->rvid, e->port, e->valid);
 
 	if (e->type != L2_MULTICAST) {
-		pr_info("Type: %d, is_static: %d, is_ip_mc: %d, is_ipv6_mc: %d, block_da: %d\n",
+		pr_debug("Type: %d, is_static: %d, is_ip_mc: %d, is_ipv6_mc: %d, block_da: %d\n",
 			e->type, e->is_static, e->is_ip_mc, e->is_ipv6_mc, e->block_da);
-		pr_info("  block_sa: %d, susp: %d, nh: %d, age: %d, is_trunk: %d, trunk: %d\n",
+		pr_debug("  block_sa: %d, susp: %d, nh: %d, age: %d, is_trunk: %d, trunk: %d\n",
 		e->block_sa, e->suspended, e->next_hop, e->age, e->is_trunk, e->trunk);
 	}
 	if (e->type == L2_MULTICAST)
-		pr_info("  L2_MULTICAST mc_portmask_index: %d\n", e->mc_portmask_index);
+		pr_debug("  L2_MULTICAST mc_portmask_index: %d\n", e->mc_portmask_index);
 	if (e->is_ip_mc || e->is_ipv6_mc)
-		pr_info("  mc_portmask_index: %d, mc_gip: %d, mc_sip: %d\n",
+		pr_debug("  mc_portmask_index: %d, mc_gip: %d, mc_sip: %d\n",
 			e->mc_portmask_index, e->mc_gip, e->mc_sip);
-	pr_info("  stack_dev: %d\n", e->stack_dev);
+	pr_debug("  stack_dev: %d\n", e->stack_dev);
 	if (e->next_hop)
-		pr_info("  nh_route_id: %d\n", e->nh_route_id);
+		pr_debug("  nh_route_id: %d\n", e->nh_route_id);
 }
 
 static void rtl83xx_setup_l2_uc_entry(struct rtl838x_l2_entry *e, int port, int vid, u64 mac)
@@ -1684,12 +1684,12 @@ static int rtl83xx_port_fdb_del(struct dsa_switch *ds, int port,
 	int err = 0, idx;
 	u64 seed = priv->r->l2_hash_seed(mac, vid);
 
-	pr_info("In %s, mac %llx, vid: %d\n", __func__, mac, vid);
+	pr_debug("In %s, mac %llx, vid: %d\n", __func__, mac, vid);
 	mutex_lock(&priv->reg_mutex);
 
 	idx = rtl83xx_find_l2_hash_entry(priv, seed, true, &e);
 
-	pr_info("Found entry index %d, key %d and bucket %d\n", idx, idx >> 2, idx & 3);
+	pr_debug("Found entry index %d, key %d and bucket %d\n", idx, idx >> 2, idx & 3);
 	if (idx >= 0) {
 		e.valid = false;
 		dump_l2_entry(&e);
@@ -1736,12 +1736,12 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 			mac = ether_addr_to_u64(&e.mac[0]);
 			pkey = priv->r->l2_hash_key(priv, priv->r->l2_hash_seed(mac, fid));
 			fid = (pkey & 0x3ff) | (fid & ~0x3ff);
-			pr_info("-> index %d, key %x, bucket %d, dmac %016llx, fid: %x rvid: %x\n",
+			pr_debug("-> index %d, key %x, bucket %d, dmac %016llx, fid: %x rvid: %x\n",
 				i, i >> 2, i & 0x3, mac, fid, e.rvid);
 			dump_l2_entry(&e);
 			seed = priv->r->l2_hash_seed(mac, e.rvid);
 			key = priv->r->l2_hash_key(priv, seed);
-			pr_info("seed: %016llx, key based on rvid: %08x\n", seed, key);
+			pr_debug("seed: %016llx, key based on rvid: %08x\n", seed, key);
 			cb(e.mac, e.vid, e.is_static, data);
 		}
 		if (e.type == L2_MULTICAST) {
@@ -1749,7 +1749,7 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 
 			if (portmask & BIT_ULL(port)) {
 				dump_l2_entry(&e);
-				pr_info("  PM: %016llx\n", portmask);
+				pr_debug("  PM: %016llx\n", portmask);
 			}
 		}
 	}
