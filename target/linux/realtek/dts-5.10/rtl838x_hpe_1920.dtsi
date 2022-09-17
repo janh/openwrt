@@ -5,7 +5,7 @@
 
 / {
 	chosen {
-		bootargs = "console=ttyS0,38400";
+		bootargs = "console=uart8250,mmio,0xb8002000";
 	};
 
 	memory@0 {
