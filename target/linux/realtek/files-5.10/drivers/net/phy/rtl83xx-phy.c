@@ -924,15 +924,22 @@ static int rtl8218b_ext_match_phy_device(struct phy_device *phydev)
 {
 	int addr = phydev->mdio.addr;
 
+	pr_info("rtl8218b_ext_match_phy_device %d\n", addr);
+
+	if (phydev->phy_id != PHY_ID_RTL8218B_E)
+		return false;
+
 	/* Both the RTL8214FC and the external RTL8218B have the same
 	 * PHY ID. On the RTL838x, the RTL8218B can only be attached_dev
 	 * at PHY IDs 0-7, while the RTL8214FC must be attached via
 	 * the pair of SGMII/1000Base-X with higher PHY-IDs
 	 */
 	if (soc_info.family == RTL8380_FAMILY_ID)
-		return phydev->phy_id == PHY_ID_RTL8218B_E && addr < 8;
+		return addr < 24;
+	else if (soc_info.family == RTL8390_FAMILY_ID)
+		return addr < 48;
 	else
-		return phydev->phy_id == PHY_ID_RTL8218B_E;
+		return true;
 }
 
 static bool rtl8214fc_media_is_fibre(struct phy_device *phydev)
@@ -1447,11 +1454,62 @@ static int rtl8380_configure_rtl8214fc(struct phy_device *phydev)
 	return 0;
 }
 
+static int rtl8390_configure_rtl8214fc(struct phy_device *phydev)
+{
+	u32 phy_id, val, ver, page = 0;
+	int i, l;
+	int mac = phydev->mdio.addr;
+	struct fw_header *h;
+	u32 *rtl8380_rtl8214fc_perchip;
+	u32 *rtl8380_rtl8214fc_perport;
+
+	val = phy_read(phydev, 2);
+	phy_id = val << 16;
+	val = phy_read(phydev, 3);
+	phy_id |= val;
+	pr_debug("Phy on MAC %d: %x\n", mac, phy_id);
+
+	/* Read internal PHY id */
+	phy_write_paged(phydev, 0, RTL821XEXT_MEDIA_PAGE_SELECT, RTL821X_MEDIA_PAGE_COPPER);
+	phy_write_paged(phydev, 0x1f, 0x1b, 0x0002);
+	val = phy_read_paged(phydev, 0x1f, 0x1c);
+	if (val != 0x6276) {
+		phydev_err(phydev, "Expected external RTL8214FC, found PHY-ID %x\n", val);
+		return -1;
+	}
+	phydev_info(phydev, "Detected external RTL8214FC\n");
+
+	/* detect phy version */
+	phy_write_paged(phydev, RTL83XX_PAGE_RAW, 27, 0x0004);
+	ver = phy_read_paged(phydev, RTL83XX_PAGE_RAW, 28);
+
+	// TODO: proper reset?
+	val = phy_read(phydev, 16);
+	if (val & (1 << 11))
+		rtl8380_rtl8214fc_on_off(phydev, true);
+	else
+		rtl8380_phy_reset(phydev);
+
+	// TODO: firmware patch
+
+	return 0;
+}
+
 static int rtl8214fc_match_phy_device(struct phy_device *phydev)
 {
 	int addr = phydev->mdio.addr;
 
-	return phydev->phy_id == PHY_ID_RTL8214FC && addr >= 24;
+	pr_info("rtl8214fc_match_phy_device %d\n", addr);
+
+	if (phydev->phy_id != PHY_ID_RTL8214FC)
+		return false;
+
+	if (soc_info.family == RTL8380_FAMILY_ID)
+		return addr >= 24;
+	else if (soc_info.family == RTL8390_FAMILY_ID)
+		return addr >= 48;
+	else
+		return false;
 }
 
 static int rtl8380_configure_serdes(struct phy_device *phydev)
@@ -3710,19 +3768,20 @@ static int rtl8214fc_phy_probe(struct phy_device *phydev)
 	int addr = phydev->mdio.addr;
 	int ret = 0;
 
-	/* 839x has internal SerDes */
-	if (soc_info.id == 0x8393)
-		return -ENODEV;
-
-	/* All base addresses of the PHYs start at multiples of 8 */
-	devm_phy_package_join(dev, phydev, addr & (~7),
+	/* All base addresses of the PHYs start at multiples of 4 */
+	devm_phy_package_join(dev, phydev, addr & (~3),
 				sizeof(struct rtl83xx_shared_private));
 
-	if (!(addr % 8)) {
+	if (!(addr % 4)) {
 		struct rtl83xx_shared_private *shared = phydev->shared->priv;
 		shared->name = "RTL8214FC";
+
 		/* Configuration must be done while patching still possible */
-		ret = rtl8380_configure_rtl8214fc(phydev);
+		ret = -1;
+		if (soc_info.family == RTL8380_FAMILY_ID)
+			ret = rtl8380_configure_rtl8214fc(phydev);
+		else if (soc_info.family == RTL8390_FAMILY_ID)
+			ret = rtl8390_configure_rtl8214fc(phydev);
 		if (ret)
 			return ret;
 	}
