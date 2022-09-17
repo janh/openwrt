@@ -1,0 +1,605 @@
+From 2ab642505e3129b13551ffe3ae193e4a7ba030ee Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Wed, 16 Dec 2020 10:45:11 -0800
+Subject: [PATCH 01/45] Merge tag 'printk-for-5.11' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk updates from Petr Mladek:
+
+ - Finally allow parallel writes and reads into/from the lockless
+   ringbuffer. But it is not a complete solution. Readers are still
+   serialized against each other. And nested writes are still prevented
+   by printk_safe per-CPU buffers.
+
+ - Use ttynull as the ultimate fallback for /dev/console.
+
+ - Officially allow disabling console output by using console="" or
+   console=null
+
+ - A few code cleanups
+
+* tag 'printk-for-5.11' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  printk: remove logbuf_lock writer-protection of ringbuffer
+  printk: inline log_output(),log_store() in vprintk_store()
+  printk: remove obsolete dead assignment
+  printk/console: Allow to disable console output by using console="" or console=null
+  init/console: Use ttynull as a fallback when there is no console
+  printk: ringbuffer: Reference text_data_ring directly in callees.
+---
+ drivers/tty/Kconfig               |  14 --
+ drivers/tty/Makefile              |   3 +-
+ drivers/tty/ttynull.c             |  18 +++
+ include/linux/console.h           |   3 +
+ init/main.c                       |  10 +-
+ kernel/printk/printk.c            | 248 ++++++++++++++++++------------
+ kernel/printk/printk_ringbuffer.c |  32 ++--
+ 7 files changed, 192 insertions(+), 136 deletions(-)
+
+diff --git a/drivers/tty/Kconfig b/drivers/tty/Kconfig
+index 93fd984eb2f5..ca359bbd62f5 100644
+--- a/drivers/tty/Kconfig
++++ b/drivers/tty/Kconfig
+@@ -428,20 +428,6 @@ config MIPS_EJTAG_FDC_KGDB_CHAN
+ 	help
+ 	  FDC channel number to use for KGDB.
+ 
+-config NULL_TTY
+-	tristate "NULL TTY driver"
+-	help
+-	  Say Y here if you want a NULL TTY which simply discards messages.
+-
+-	  This is useful to allow userspace applications which expect a console
+-	  device to work without modifications even when no console is
+-	  available or desired.
+-
+-	  In order to use this driver, you should redirect the console to this
+-	  TTY, or boot the kernel with console=ttynull.
+-
+-	  If unsure, say N.
+-
+ config TRACE_ROUTER
+ 	tristate "Trace data router for MIPI P1149.7 cJTAG standard"
+ 	depends on TRACE_SINK
+diff --git a/drivers/tty/Makefile b/drivers/tty/Makefile
+index 020b1cd9294f..f6b6bee0422d 100644
+--- a/drivers/tty/Makefile
++++ b/drivers/tty/Makefile
+@@ -2,7 +2,7 @@
+ obj-$(CONFIG_TTY)		+= tty_io.o n_tty.o tty_ioctl.o tty_ldisc.o \
+ 				   tty_buffer.o tty_port.o tty_mutex.o \
+ 				   tty_ldsem.o tty_baudrate.o tty_jobctrl.o \
+-				   n_null.o
++				   n_null.o ttynull.o
+ obj-$(CONFIG_LEGACY_PTYS)	+= pty.o
+ obj-$(CONFIG_UNIX98_PTYS)	+= pty.o
+ obj-$(CONFIG_AUDIT)		+= tty_audit.o
+@@ -25,7 +25,6 @@ obj-$(CONFIG_ISI)		+= isicom.o
+ obj-$(CONFIG_MOXA_INTELLIO)	+= moxa.o
+ obj-$(CONFIG_MOXA_SMARTIO)	+= mxser.o
+ obj-$(CONFIG_NOZOMI)		+= nozomi.o
+-obj-$(CONFIG_NULL_TTY)	        += ttynull.o
+ obj-$(CONFIG_ROCKETPORT)	+= rocket.o
+ obj-$(CONFIG_SYNCLINK_GT)	+= synclink_gt.o
+ obj-$(CONFIG_SYNCLINKMP)	+= synclinkmp.o
+diff --git a/drivers/tty/ttynull.c b/drivers/tty/ttynull.c
+index 17f05b7eb6d3..eced70ec54e1 100644
+--- a/drivers/tty/ttynull.c
++++ b/drivers/tty/ttynull.c
+@@ -2,6 +2,13 @@
+ /*
+  * Copyright (C) 2019 Axis Communications AB
+  *
++ * The console is useful for userspace applications which expect a console
++ * device to work without modifications even when no console is available
++ * or desired.
++ *
++ * In order to use this driver, you should redirect the console to this
++ * TTY, or boot the kernel with console=ttynull.
++ *
+  * Based on ttyprintk.c:
+  *  Copyright (C) 2010 Samo Pogacnik
+  */
+@@ -59,6 +66,17 @@ static struct console ttynull_console = {
+ 	.device = ttynull_device,
+ };
+ 
++void __init register_ttynull_console(void)
++{
++	if (!ttynull_driver)
++		return;
++
++	if (add_preferred_console(ttynull_console.name, 0, NULL))
++		return;
++
++	register_console(&ttynull_console);
++}
++
+ static int __init ttynull_init(void)
+ {
+ 	struct tty_driver *driver;
+diff --git a/include/linux/console.h b/include/linux/console.h
+index bc2a749e6f0d..58b718489759 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -189,9 +189,12 @@ extern int braille_register_console(struct console *, int index,
+ extern int braille_unregister_console(struct console *);
+ #ifdef CONFIG_TTY
+ extern void console_sysfs_notify(void);
++extern void register_ttynull_console(void);
+ #else
+ static inline void console_sysfs_notify(void)
+ { }
++static inline void register_ttynull_console(void)
++{ }
+ #endif
+ extern bool console_suspend_enabled;
+ 
+diff --git a/init/main.c b/init/main.c
+index d8bfe61b5a88..952802d89bd4 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -1477,8 +1477,14 @@ void __init console_on_rootfs(void)
+ 	struct file *file = filp_open("/dev/console", O_RDWR, 0);
+ 
+ 	if (IS_ERR(file)) {
+-		pr_err("Warning: unable to open an initial console.\n");
+-		return;
++		pr_err("Warning: unable to open an initial console. Fallback to ttynull.\n");
++		register_ttynull_console();
++
++		file = filp_open("/dev/console", O_RDWR, 0);
++		if (IS_ERR(file)) {
++			pr_err("Warning: Failed to add ttynull console. No stdin, stdout, and stderr for the init process!\n");
++			return;
++		}
+ 	}
+ 	init_dup(file);
+ 	init_dup(file);
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 17a310dcb6d9..ca58dc122848 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -493,52 +493,6 @@ static void truncate_msg(u16 *text_len, u16 *trunc_msg_len)
+ 		*trunc_msg_len = 0;
+ }
+ 
+-/* insert record into the buffer, discard old ones, update heads */
+-static int log_store(u32 caller_id, int facility, int level,
+-		     enum log_flags flags, u64 ts_nsec,
+-		     const struct dev_printk_info *dev_info,
+-		     const char *text, u16 text_len)
+-{
+-	struct prb_reserved_entry e;
+-	struct printk_record r;
+-	u16 trunc_msg_len = 0;
+-
+-	prb_rec_init_wr(&r, text_len);
+-
+-	if (!prb_reserve(&e, prb, &r)) {
+-		/* truncate the message if it is too long for empty buffer */
+-		truncate_msg(&text_len, &trunc_msg_len);
+-		prb_rec_init_wr(&r, text_len + trunc_msg_len);
+-		/* survive when the log buffer is too small for trunc_msg */
+-		if (!prb_reserve(&e, prb, &r))
+-			return 0;
+-	}
+-
+-	/* fill message */
+-	memcpy(&r.text_buf[0], text, text_len);
+-	if (trunc_msg_len)
+-		memcpy(&r.text_buf[text_len], trunc_msg, trunc_msg_len);
+-	r.info->text_len = text_len + trunc_msg_len;
+-	r.info->facility = facility;
+-	r.info->level = level & 7;
+-	r.info->flags = flags & 0x1f;
+-	if (ts_nsec > 0)
+-		r.info->ts_nsec = ts_nsec;
+-	else
+-		r.info->ts_nsec = local_clock();
+-	r.info->caller_id = caller_id;
+-	if (dev_info)
+-		memcpy(&r.info->dev_info, dev_info, sizeof(r.info->dev_info));
+-
+-	/* A message without a trailing newline can be continued. */
+-	if (!(flags & LOG_NEWLINE))
+-		prb_commit(&e);
+-	else
+-		prb_final_commit(&e);
+-
+-	return (text_len + trunc_msg_len);
+-}
+-
+ int dmesg_restrict = IS_ENABLED(CONFIG_SECURITY_DMESG_RESTRICT);
+ 
+ static int syslog_action_restricted(int type)
+@@ -743,7 +697,6 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
+ 			if (LOG_FACILITY(u) != 0)
+ 				facility = LOG_FACILITY(u);
+ 			endp++;
+-			len -= endp - line;
+ 			line = endp;
+ 		}
+ 	}
+@@ -1175,7 +1128,7 @@ void __init setup_log_buf(int early)
+ 		 new_descs, ilog2(new_descs_count),
+ 		 new_infos);
+ 
+-	logbuf_lock_irqsave(flags);
++	printk_safe_enter_irqsave(flags);
+ 
+ 	log_buf_len = new_log_buf_len;
+ 	log_buf = new_log_buf;
+@@ -1192,7 +1145,7 @@ void __init setup_log_buf(int early)
+ 	 */
+ 	prb = &printk_rb_dynamic;
+ 
+-	logbuf_unlock_irqrestore(flags);
++	printk_safe_exit_irqrestore(flags);
+ 
+ 	if (seq != prb_next_seq(&printk_rb_static)) {
+ 		pr_err("dropped %llu messages\n",
+@@ -1933,83 +1886,177 @@ static inline u32 printk_caller_id(void)
+ 		0x80000000 + raw_smp_processor_id();
+ }
+ 
+-static size_t log_output(int facility, int level, enum log_flags lflags,
+-			 const struct dev_printk_info *dev_info,
+-			 char *text, size_t text_len)
++/**
++ * parse_prefix - Parse level and control flags.
++ *
++ * @text:     The terminated text message.
++ * @level:    A pointer to the current level value, will be updated.
++ * @lflags:   A pointer to the current log flags, will be updated.
++ *
++ * @level may be NULL if the caller is not interested in the parsed value.
++ * Otherwise the variable pointed to by @level must be set to
++ * LOGLEVEL_DEFAULT in order to be updated with the parsed value.
++ *
++ * @lflags may be NULL if the caller is not interested in the parsed value.
++ * Otherwise the variable pointed to by @lflags will be OR'd with the parsed
++ * value.
++ *
++ * Return: The length of the parsed level and control flags.
++ */
++static u16 parse_prefix(char *text, int *level, enum log_flags *lflags)
+ {
+-	const u32 caller_id = printk_caller_id();
++	u16 prefix_len = 0;
++	int kern_level;
+ 
+-	if (lflags & LOG_CONT) {
+-		struct prb_reserved_entry e;
+-		struct printk_record r;
++	while (*text) {
++		kern_level = printk_get_level(text);
++		if (!kern_level)
++			break;
+ 
+-		prb_rec_init_wr(&r, text_len);
+-		if (prb_reserve_in_last(&e, prb, &r, caller_id, LOG_LINE_MAX)) {
+-			memcpy(&r.text_buf[r.info->text_len], text, text_len);
+-			r.info->text_len += text_len;
+-			if (lflags & LOG_NEWLINE) {
+-				r.info->flags |= LOG_NEWLINE;
+-				prb_final_commit(&e);
+-			} else {
+-				prb_commit(&e);
+-			}
+-			return text_len;
++		switch (kern_level) {
++		case '0' ... '7':
++			if (level && *level == LOGLEVEL_DEFAULT)
++				*level = kern_level - '0';
++			break;
++		case 'c':	/* KERN_CONT */
++			if (lflags)
++				*lflags |= LOG_CONT;
+ 		}
++
++		prefix_len += 2;
++		text += 2;
+ 	}
+ 
+-	/* Store it in the record log */
+-	return log_store(caller_id, facility, level, lflags, 0,
+-			 dev_info, text, text_len);
++	return prefix_len;
+ }
+ 
+-/* Must be called under logbuf_lock. */
++static u16 printk_sprint(char *text, u16 size, int facility, enum log_flags *lflags,
++			 const char *fmt, va_list args)
++{
++	u16 text_len;
++
++	text_len = vscnprintf(text, size, fmt, args);
++
++	/* Mark and strip a trailing newline. */
++	if (text_len && text[text_len - 1] == '\n') {
++		text_len--;
++		*lflags |= LOG_NEWLINE;
++	}
++
++	/* Strip log level and control flags. */
++	if (facility == 0) {
++		u16 prefix_len;
++
++		prefix_len = parse_prefix(text, NULL, NULL);
++		if (prefix_len) {
++			text_len -= prefix_len;
++			memmove(text, text + prefix_len, text_len);
++		}
++	}
++
++	return text_len;
++}
++
++__printf(4, 0)
+ int vprintk_store(int facility, int level,
+ 		  const struct dev_printk_info *dev_info,
+ 		  const char *fmt, va_list args)
+ {
+-	static char textbuf[LOG_LINE_MAX];
+-	char *text = textbuf;
+-	size_t text_len;
++	const u32 caller_id = printk_caller_id();
++	struct prb_reserved_entry e;
+ 	enum log_flags lflags = 0;
++	struct printk_record r;
++	u16 trunc_msg_len = 0;
++	char prefix_buf[8];
++	u16 reserve_size;
++	va_list args2;
++	u16 text_len;
++	u64 ts_nsec;
+ 
+ 	/*
+-	 * The printf needs to come first; we need the syslog
+-	 * prefix which might be passed-in as a parameter.
++	 * Since the duration of printk() can vary depending on the message
++	 * and state of the ringbuffer, grab the timestamp now so that it is
++	 * close to the call of printk(). This provides a more deterministic
++	 * timestamp with respect to the caller.
+ 	 */
+-	text_len = vscnprintf(text, sizeof(textbuf), fmt, args);
++	ts_nsec = local_clock();
+ 
+-	/* mark and strip a trailing newline */
+-	if (text_len && text[text_len-1] == '\n') {
+-		text_len--;
++	/*
++	 * The sprintf needs to come first since the syslog prefix might be
++	 * passed in as a parameter. An extra byte must be reserved so that
++	 * later the vscnprintf() into the reserved buffer has room for the
++	 * terminating '\0', which is not counted by vsnprintf().
++	 */
++	va_copy(args2, args);
++	reserve_size = vsnprintf(&prefix_buf[0], sizeof(prefix_buf), fmt, args2) + 1;
++	va_end(args2);
++
++	if (reserve_size > LOG_LINE_MAX)
++		reserve_size = LOG_LINE_MAX;
++
++	/* Extract log level or control flags. */
++	if (facility == 0)
++		parse_prefix(&prefix_buf[0], &level, &lflags);
++
++	if (level == LOGLEVEL_DEFAULT)
++		level = default_message_loglevel;
++
++	if (dev_info)
+ 		lflags |= LOG_NEWLINE;
+-	}
+ 
+-	/* strip kernel syslog prefix and extract log level or control flags */
+-	if (facility == 0) {
+-		int kern_level;
++	if (lflags & LOG_CONT) {
++		prb_rec_init_wr(&r, reserve_size);
++		if (prb_reserve_in_last(&e, prb, &r, caller_id, LOG_LINE_MAX)) {
++			text_len = printk_sprint(&r.text_buf[r.info->text_len], reserve_size,
++						 facility, &lflags, fmt, args);
++			r.info->text_len += text_len;
+ 
+-		while ((kern_level = printk_get_level(text)) != 0) {
+-			switch (kern_level) {
+-			case '0' ... '7':
+-				if (level == LOGLEVEL_DEFAULT)
+-					level = kern_level - '0';
+-				break;
+-			case 'c':	/* KERN_CONT */
+-				lflags |= LOG_CONT;
++			if (lflags & LOG_NEWLINE) {
++				r.info->flags |= LOG_NEWLINE;
++				prb_final_commit(&e);
++			} else {
++				prb_commit(&e);
+ 			}
+ 
+-			text_len -= 2;
+-			text += 2;
++			return text_len;
+ 		}
+ 	}
+ 
+-	if (level == LOGLEVEL_DEFAULT)
+-		level = default_message_loglevel;
++	/*
++	 * Explicitly initialize the record before every prb_reserve() call.
++	 * prb_reserve_in_last() and prb_reserve() purposely invalidate the
++	 * structure when they fail.
++	 */
++	prb_rec_init_wr(&r, reserve_size);
++	if (!prb_reserve(&e, prb, &r)) {
++		/* truncate the message if it is too long for empty buffer */
++		truncate_msg(&reserve_size, &trunc_msg_len);
+ 
++		prb_rec_init_wr(&r, reserve_size + trunc_msg_len);
++		if (!prb_reserve(&e, prb, &r))
++			return 0;
++	}
++
++	/* fill message */
++	text_len = printk_sprint(&r.text_buf[0], reserve_size, facility, &lflags, fmt, args);
++	if (trunc_msg_len)
++		memcpy(&r.text_buf[text_len], trunc_msg, trunc_msg_len);
++	r.info->text_len = text_len + trunc_msg_len;
++	r.info->facility = facility;
++	r.info->level = level & 7;
++	r.info->flags = lflags & 0x1f;
++	r.info->ts_nsec = ts_nsec;
++	r.info->caller_id = caller_id;
+ 	if (dev_info)
+-		lflags |= LOG_NEWLINE;
++		memcpy(&r.info->dev_info, dev_info, sizeof(r.info->dev_info));
+ 
+-	return log_output(facility, level, lflags, dev_info, text, text_len);
++	/* A message without a trailing newline can be continued. */
++	if (!(lflags & LOG_NEWLINE))
++		prb_commit(&e);
++	else
++		prb_final_commit(&e);
++
++	return (text_len + trunc_msg_len);
+ }
+ 
+ asmlinkage int vprintk_emit(int facility, int level,
+@@ -2032,10 +2079,9 @@ asmlinkage int vprintk_emit(int facility, int level,
+ 	boot_delay_msec(level);
+ 	printk_delay();
+ 
+-	/* This stops the holder of console_sem just where we want him */
+-	logbuf_lock_irqsave(flags);
++	printk_safe_enter_irqsave(flags);
+ 	printed_len = vprintk_store(facility, level, dev_info, fmt, args);
+-	logbuf_unlock_irqrestore(flags);
++	printk_safe_exit_irqrestore(flags);
+ 
+ 	/* If called from the scheduler, we can not call up(). */
+ 	if (!in_sched) {
+diff --git a/kernel/printk/printk_ringbuffer.c b/kernel/printk/printk_ringbuffer.c
+index 617dd6358965..8a7b7362c0dd 100644
+--- a/kernel/printk/printk_ringbuffer.c
++++ b/kernel/printk/printk_ringbuffer.c
+@@ -559,11 +559,12 @@ static void desc_make_reusable(struct prb_desc_ring *desc_ring,
+  * on error the caller can re-load the tail lpos to determine the situation.
+  */
+ static bool data_make_reusable(struct printk_ringbuffer *rb,
+-			       struct prb_data_ring *data_ring,
+ 			       unsigned long lpos_begin,
+ 			       unsigned long lpos_end,
+ 			       unsigned long *lpos_out)
+ {
++
++	struct prb_data_ring *data_ring = &rb->text_data_ring;
+ 	struct prb_desc_ring *desc_ring = &rb->desc_ring;
+ 	struct prb_data_block *blk;
+ 	enum desc_state d_state;
+@@ -625,10 +626,9 @@ static bool data_make_reusable(struct printk_ringbuffer *rb,
+  * descriptors into the reusable state if the tail is pushed beyond
+  * their associated data block.
+  */
+-static bool data_push_tail(struct printk_ringbuffer *rb,
+-			   struct prb_data_ring *data_ring,
+-			   unsigned long lpos)
++static bool data_push_tail(struct printk_ringbuffer *rb, unsigned long lpos)
+ {
++	struct prb_data_ring *data_ring = &rb->text_data_ring;
+ 	unsigned long tail_lpos_new;
+ 	unsigned long tail_lpos;
+ 	unsigned long next_lpos;
+@@ -669,8 +669,7 @@ static bool data_push_tail(struct printk_ringbuffer *rb,
+ 		 * Make all descriptors reusable that are associated with
+ 		 * data blocks before @lpos.
+ 		 */
+-		if (!data_make_reusable(rb, data_ring, tail_lpos, lpos,
+-					&next_lpos)) {
++		if (!data_make_reusable(rb, tail_lpos, lpos, &next_lpos)) {
+ 			/*
+ 			 * 1. Guarantee the block ID loaded in
+ 			 *    data_make_reusable() is performed before
+@@ -807,7 +806,7 @@ static bool desc_push_tail(struct printk_ringbuffer *rb,
+ 	 * data blocks once their associated descriptor is gone.
+ 	 */
+ 
+-	if (!data_push_tail(rb, &rb->text_data_ring, desc.text_blk_lpos.next))
++	if (!data_push_tail(rb, desc.text_blk_lpos.next))
+ 		return false;
+ 
+ 	/*
+@@ -1019,10 +1018,10 @@ static unsigned long get_next_lpos(struct prb_data_ring *data_ring,
+  * if necessary. This function also associates the data block with
+  * a specified descriptor.
+  */
+-static char *data_alloc(struct printk_ringbuffer *rb,
+-			struct prb_data_ring *data_ring, unsigned int size,
++static char *data_alloc(struct printk_ringbuffer *rb, unsigned int size,
+ 			struct prb_data_blk_lpos *blk_lpos, unsigned long id)
+ {
++	struct prb_data_ring *data_ring = &rb->text_data_ring;
+ 	struct prb_data_block *blk;
+ 	unsigned long begin_lpos;
+ 	unsigned long next_lpos;
+@@ -1041,7 +1040,7 @@ static char *data_alloc(struct printk_ringbuffer *rb,
+ 	do {
+ 		next_lpos = get_next_lpos(data_ring, begin_lpos, size);
+ 
+-		if (!data_push_tail(rb, data_ring, next_lpos - DATA_SIZE(data_ring))) {
++		if (!data_push_tail(rb, next_lpos - DATA_SIZE(data_ring))) {
+ 			/* Failed to allocate, specify a data-less block. */
+ 			blk_lpos->begin = FAILED_LPOS;
+ 			blk_lpos->next = FAILED_LPOS;
+@@ -1100,10 +1099,10 @@ static char *data_alloc(struct printk_ringbuffer *rb,
+  * Return a pointer to the beginning of the entire data buffer or NULL on
+  * failure.
+  */
+-static char *data_realloc(struct printk_ringbuffer *rb,
+-			  struct prb_data_ring *data_ring, unsigned int size,
++static char *data_realloc(struct printk_ringbuffer *rb, unsigned int size,
+ 			  struct prb_data_blk_lpos *blk_lpos, unsigned long id)
+ {
++	struct prb_data_ring *data_ring = &rb->text_data_ring;
+ 	struct prb_data_block *blk;
+ 	unsigned long head_lpos;
+ 	unsigned long next_lpos;
+@@ -1130,7 +1129,7 @@ static char *data_realloc(struct printk_ringbuffer *rb,
+ 		return &blk->data[0];
+ 	}
+ 
+-	if (!data_push_tail(rb, data_ring, next_lpos - DATA_SIZE(data_ring)))
++	if (!data_push_tail(rb, next_lpos - DATA_SIZE(data_ring)))
+ 		return NULL;
+ 
+ 	/* The memory barrier involvement is the same as data_alloc:A. */
+@@ -1395,7 +1394,7 @@ bool prb_reserve_in_last(struct prb_reserved_entry *e, struct printk_ringbuffer
+ 		if (r->text_buf_size > max_size)
+ 			goto fail;
+ 
+-		r->text_buf = data_alloc(rb, &rb->text_data_ring, r->text_buf_size,
++		r->text_buf = data_alloc(rb, r->text_buf_size,
+ 					 &d->text_blk_lpos, id);
+ 	} else {
+ 		if (!get_data(&rb->text_data_ring, &d->text_blk_lpos, &data_size))
+@@ -1419,7 +1418,7 @@ bool prb_reserve_in_last(struct prb_reserved_entry *e, struct printk_ringbuffer
+ 		if (r->text_buf_size > max_size)
+ 			goto fail;
+ 
+-		r->text_buf = data_realloc(rb, &rb->text_data_ring, r->text_buf_size,
++		r->text_buf = data_realloc(rb, r->text_buf_size,
+ 					   &d->text_blk_lpos, id);
+ 	}
+ 	if (r->text_buf_size && !r->text_buf)
+@@ -1547,8 +1546,7 @@ bool prb_reserve(struct prb_reserved_entry *e, struct printk_ringbuffer *rb,
+ 	if (info->seq > 0)
+ 		desc_make_final(desc_ring, DESC_ID(id - 1));
+ 
+-	r->text_buf = data_alloc(rb, &rb->text_data_ring, r->text_buf_size,
+-				 &d->text_blk_lpos, id);
++	r->text_buf = data_alloc(rb, r->text_buf_size, &d->text_blk_lpos, id);
+ 	/* If text data allocation fails, a data-less record is committed. */
+ 	if (r->text_buf_size && !r->text_buf) {
+ 		prb_commit(e);
+-- 
+2.37.3
+

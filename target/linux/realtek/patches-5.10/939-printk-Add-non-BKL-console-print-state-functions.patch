@@ -1,0 +1,220 @@
+From fc51ed9648ca0c07878a513cb818591bae6bd6de Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Thu, 1 Sep 2022 17:39:14 +0200
+Subject: [PATCH 39/45] printk: Add non-BKL console print state functions
+
+Provide three functions which are related to the safe handover mechanism
+and allow console drivers to denote takeover unsafe sections:
+
+ - console_can_proceed()
+
+   Invoked by a console driver to check whether a handover request is pending
+   or whether the console was taken over in a hostile fashion.
+
+ - console_enter/exit_unsafe()
+
+   Invoked by a console driver to reflect that the driver output function is
+   about to enter or to leave an critical region where a hostile take over
+   is unsafe. These functions are also cancelation points.
+
+   The unsafe state is reflected in the console state and allows a takeover
+   attempt to make informed decisions whether to take over and/or output on
+   such console at all. The unsafe state is also reflected on output to the
+   driver in the write context to the atomic_write() output function so the
+   driver can make informed decisions about the required actions or take an
+   special emergency path.
+
+Co-Developed-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h      |  20 ++++++
+ kernel/printk/printk_nobkl.c | 134 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 154 insertions(+)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index 3799d67d31fc..89c859018ec1 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -301,6 +301,22 @@ struct cons_context {
+ 	unsigned int		spinwait	: 1;
+ };
+ 
++/**
++ * struct cons_write_context - Context handed to the write callbacks
++ * @ctxt:	The core console context
++ * @outbuf:	Pointer to the text buffer for output
++ * @len:	Length to write
++ * @pos:	Current write position in @outbuf
++ * @unsafe:	Invoked in unsafe state due to force takeover
++ */
++struct cons_write_context {
++	struct cons_context __private	ctxt;
++	char				*outbuf;
++	unsigned int			len;
++	unsigned int			pos;
++	bool				unsafe;
++};
++
+ #define CONS_MAX_NEST_LVL	8
+ 
+ /**
+@@ -424,6 +440,10 @@ extern void console_list_unlock(void) __releases(console_mutex);
+ #define for_each_console_kgdb(con)					\
+ 	hlist_for_each_entry(con, &console_list, node)
+ 
++extern bool console_can_proceed(struct cons_write_context *wctxt);
++extern bool console_enter_unsafe(struct cons_write_context *wctxt);
++extern bool console_exit_unsafe(struct cons_write_context *wctxt);
++
+ extern int console_set_on_cmdline;
+ extern struct console *early_console;
+ 
+diff --git a/kernel/printk/printk_nobkl.c b/kernel/printk/printk_nobkl.c
+index a243cae96ffe..2409d0257606 100644
+--- a/kernel/printk/printk_nobkl.c
++++ b/kernel/printk/printk_nobkl.c
+@@ -877,6 +877,140 @@ static void cons_free_percpu_data(struct console *con)
+ 	con->pcpu_data = NULL;
+ }
+ 
++/**
++ * console_can_proceed - Check whether printing can proceed
++ * @wctxt:	The write context which was handed to the write function
++ *
++ * Returns:	True if the state is correct. False if a handover
++ *		has been requested or if the console was taken
++ *		over.
++ *
++ * Must be invoked after the record was dumped into the assigned record
++ * buffer and at appropriate safe places in the driver.  For unsafe driver
++ * sections see console_enter_unsafe().
++ *
++ * When this function returns false then the calling context is not allowed
++ * to go forward and has to back out immediately and carefully.  The buffer
++ * content is not longer trusted either and the console lock is not longer
++ * held.
++ */
++bool console_can_proceed(struct cons_write_context *wctxt)
++{
++	struct cons_context *ctxt = &ACCESS_PRIVATE(wctxt, ctxt);
++	struct console *con = ctxt->console;
++	struct cons_state state;
++
++	cons_state_read(con, STATE_REAL, &state);
++	/* Store it for analyis or reuse */
++	copy_full_state(ctxt->old_state, state);
++
++	/*
++	 * If the state aside of req_prio is not longer matching, console
++	 * was taken over.
++	 */
++	if (!cons_state_full_match(state, ctxt->state))
++		return false;
++
++	/*
++	 * Having a safe point for take over and eventually a few
++	 * duplicated characters or a full line is way better than a
++	 * hostile takeover. Post processing can take care of the garbage.
++	 * Continue if the requested priority is not sufficient.
++	 */
++	if (state.req_prio <= state.cur_prio)
++		return true;
++
++	/* Release and hand over */
++	cons_release(ctxt);
++	/*
++	 * This does not check whether the handover succeeded. The
++	 * outermost callsite has to do the final check whether printing
++	 * should continue or not. The console is unlocked already so go
++	 * back all the way instead of trying to implement heuristics in
++	 * tons of places.
++	 */
++	return false;
++}
++
++/**
++ * __console_update_unsafe - Update the unsafe bit in @con->atomic_state
++ * @wctxt:	The write context which was handed to the write function
++ *
++ * Returns:	True if the state is correct. False if a handover
++ *		has been requested or if the console was taken
++ *		over.
++ *
++ * Must be invoked before a unsafe driver section is entered.
++ *
++ * When this function returns false then the calling context is not allowed
++ * to go forward and has to back out immediately and carefully.  The buffer
++ * content is not longer trusted either and the console lock is not longer
++ * held.
++ *
++ * Internal helper to avoid duplicated code
++ */
++static bool __console_update_unsafe(struct cons_write_context *wctxt, bool unsafe)
++{
++	struct cons_context *ctxt = &ACCESS_PRIVATE(wctxt, ctxt);
++	struct console *con = ctxt->console;
++	struct cons_state new;
++
++	do  {
++		if (!console_can_proceed(wctxt))
++			return false;
++		/*
++		 * console_can_proceed() saved the real state in
++		 * ctxt->old_state
++		 */
++		copy_full_state(new, ctxt->old_state);
++		new.unsafe = unsafe;
++
++	} while (!cons_state_try_cmpxchg(con, STATE_REAL, &ctxt->old_state, &new));
++
++	copy_full_state(ctxt->state, new);
++	return true;
++}
++
++/**
++ * console_enter_unsafe - Enter an unsafe region in the driver
++ * @wctxt:	The write context which was handed to the write function
++ *
++ * Returns:	True if the state is correct. False if a handover
++ *		has been requested or if the console was taken
++ *		over.
++ *
++ * Must be invoked before a unsafe driver section is entered.
++ *
++ * When this function returns false then the calling context is not allowed
++ * to go forward and has to back out immediately and carefully.  The buffer
++ * content is not longer trusted either and the console lock is not longer
++ * held.
++ */
++bool console_enter_unsafe(struct cons_write_context *wctxt)
++{
++	return __console_update_unsafe(wctxt, true);
++}
++
++/**
++ * console_exit_unsafe - Exit an unsafe region in the driver
++ * @wctxt:	The write context which was handed to the write function
++ *
++ * Returns:	True if the state is correct. False if a handover
++ *		has been requested or if the console was taken
++ *		over.
++ *
++ * Must be invoked before a unsafe driver section is exited.
++ *
++ * When this function returns false then the calling context is not allowed
++ * to go forward and has to back out immediately and carefully.  The buffer
++ * content is not longer trusted either and the console lock is not longer
++ * held.
++ */
++bool console_exit_unsafe(struct cons_write_context *wctxt)
++{
++	return __console_update_unsafe(wctxt, false);
++}
++
+ /**
+  * cons_nobkl_init - Initialize the NOBKL console state
+  * @con:	Console to initialize
+-- 
+2.37.3
+

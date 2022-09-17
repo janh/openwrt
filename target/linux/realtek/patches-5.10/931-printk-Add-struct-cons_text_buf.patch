@@ -1,0 +1,41 @@
+From 4e455a134719c1a9524cea2d642e5bbd992ef46e Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Thu, 1 Sep 2022 11:11:56 +0200
+Subject: [PATCH 31/45] printk: Add struct cons_text_buf
+
+Create a data structure to replace the open coded seperate buffers for
+regular and extended formatting.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index e0fa066205fb..2aa105c22fed 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -173,6 +173,20 @@ enum cons_flags {
+ 	CON_EXTENDED		= BIT(6),
+ };
+ 
++/**
++ * struct cons_text_buf - console output text buffer
++ * @ext_text:		Buffer for extended log format text
++ * @dropped_text:	Buffer for dropped text
++ * @text:		Buffer for ringbuffer text
++ */
++struct cons_text_buf {
++	union {
++		char	ext_text[CONSOLE_EXT_LOG_MAX];
++		char	dropped_text[DROPPED_TEXT_MAX];
++	};
++	char		text[CONSOLE_LOG_MAX];
++};
++
+ /**
+  * struct console - The console descriptor structure
+  * @name:		The name of the console driver
+-- 
+2.37.3
+

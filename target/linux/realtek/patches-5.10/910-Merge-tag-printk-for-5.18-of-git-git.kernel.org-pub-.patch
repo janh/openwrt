@@ -1,0 +1,481 @@
+From b4673e2159f8e9cb7137209d93691793bba771b1 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Wed, 23 Mar 2022 10:54:27 -0700
+Subject: [PATCH 10/45] Merge tag 'printk-for-5.18' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk updates from Petr Mladek:
+
+ - Make %pK behave the same as %p for kptr_restrict == 0 also with
+   no_hash_pointers parameter
+
+ - Ignore the default console in the device tree also when console=null
+   or console="" is used on the command line
+
+ - Document console=null and console="" behavior
+
+ - Prevent a deadlock and a livelock caused by console_lock in panic()
+
+ - Make console_lock available for panicking CPU
+
+ - Fast query for the next to-be-used sequence number
+
+ - Use the expected return values in printk.devkmsg __setup handler
+
+ - Use the correct atomic operations in wake_up_klogd() irq_work handler
+
+ - Avoid possible unaligned access when handling %4cc printing format
+
+* tag 'printk-for-5.18' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  printk: fix return value of printk.devkmsg __setup handler
+  vsprintf: Fix %pK with kptr_restrict == 0
+  printk: make suppress_panic_printk static
+  printk: Set console_set_on_cmdline=1 when __add_preferred_console() is called with user_specified == true
+  Docs: printk: add 'console=null|""' to admin/kernel-parameters
+  printk: use atomic updates for klogd work
+  printk: Drop console_sem during panic
+  printk: Avoid livelock with heavy printk during panic
+  printk: disable optimistic spin during panic
+  printk: Add panic_in_progress helper
+  vsprintf: Move space out of string literals in fourcc_string()
+  vsprintf: Fix potential unaligned access
+  printk: ringbuffer: Improve prb_next_seq() performance
+---
+ .../admin-guide/kernel-parameters.txt         |  9 ++-
+ kernel/printk/printk.c                        | 79 +++++++++++++++++--
+ kernel/printk/printk_ringbuffer.c             | 52 ++++++++++--
+ kernel/printk/printk_ringbuffer.h             |  2 +
+ lib/vsprintf.c                                | 42 +++++-----
+ 5 files changed, 152 insertions(+), 32 deletions(-)
+
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index 25c5df314a05..b6e4f5a8e8b4 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -676,6 +676,12 @@
+ 		hvc<n>	Use the hypervisor console device <n>. This is for
+ 			both Xen and PowerPC hypervisors.
+ 
++		{ null | "" }
++			Use to disable console output, i.e., to have kernel
++			console messages discarded.
++			This must be the only console= parameter used on the
++			kernel command line.
++
+ 		If the device connected to the port is not a TTY but a braille
+ 		device, prepend "brl," before the device type, for instance
+ 			console=brl,ttyS0
+@@ -3336,8 +3342,7 @@
+ 			difficult since unequal pointers can no longer be
+ 			compared.  However, if this command-line option is
+ 			specified, then all normal pointers will have their true
+-			value printed.  Pointers printed via %pK may still be
+-			hashed.  This option should only be specified when
++			value printed. This option should only be specified when
+ 			debugging the kernel.  Please do not use on production
+ 			kernels.
+ 
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index f416e264edcf..1095c09b84bb 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -93,6 +93,12 @@ EXPORT_SYMBOL_GPL(console_drivers);
+  */
+ int __read_mostly suppress_printk;
+ 
++/*
++ * During panic, heavy printk by other CPUs can delay the
++ * panic and risk deadlock on console resources.
++ */
++static int __read_mostly suppress_panic_printk;
++
+ #ifdef CONFIG_LOCKDEP
+ static struct lockdep_map console_lock_dep_map = {
+ 	.name = "console_lock"
+@@ -258,6 +264,11 @@ static void __up_console_sem(unsigned long ip)
+ }
+ #define up_console_sem() __up_console_sem(_RET_IP_)
+ 
++static bool panic_in_progress(void)
++{
++	return unlikely(atomic_read(&panic_cpu) != PANIC_CPU_INVALID);
++}
++
+ /*
+  * This is used for debugging the mess that is the VT code by
+  * keeping track if we have the console semaphore held. It's
+@@ -1844,6 +1855,16 @@ static int console_trylock_spinning(void)
+ 	if (console_trylock())
+ 		return 1;
+ 
++	/*
++	 * It's unsafe to spin once a panic has begun. If we are the
++	 * panic CPU, we may have already halted the owner of the
++	 * console_sem. If we are not the panic CPU, then we should
++	 * avoid taking console_sem, so the panic CPU has a better
++	 * chance of cleanly acquiring it later.
++	 */
++	if (panic_in_progress())
++		return 0;
++
+ 	printk_safe_enter_irqsave(flags);
+ 
+ 	raw_spin_lock(&console_owner_lock);
+@@ -2219,6 +2240,10 @@ asmlinkage int vprintk_emit(int facility, int level,
+ 	if (unlikely(suppress_printk))
+ 		return 0;
+ 
++	if (unlikely(suppress_panic_printk) &&
++	    atomic_read(&panic_cpu) != raw_smp_processor_id())
++		return 0;
++
+ 	if (level == LOGLEVEL_SCHED) {
+ 		level = LOGLEVEL_DEFAULT;
+ 		in_sched = true;
+@@ -2325,6 +2350,20 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
+ }
+ #endif
+ 
++static void set_user_specified(struct console_cmdline *c, bool user_specified)
++{
++	if (!user_specified)
++		return;
++
++	/*
++	 * @c console was defined by the user on the command line.
++	 * Do not clear when added twice also by SPCR or the device tree.
++	 */
++	c->user_specified = true;
++	/* At least one console defined by the user on the command line. */
++	console_set_on_cmdline = 1;
++}
++
+ static int __add_preferred_console(char *name, int idx, char *options,
+ 				   char *brl_options, bool user_specified)
+ {
+@@ -2341,8 +2380,7 @@ static int __add_preferred_console(char *name, int idx, char *options,
+ 		if (strcmp(c->name, name) == 0 && c->index == idx) {
+ 			if (!brl_options)
+ 				preferred_console = i;
+-			if (user_specified)
+-				c->user_specified = true;
++			set_user_specified(c, user_specified);
+ 			return 0;
+ 		}
+ 	}
+@@ -2352,7 +2390,7 @@ static int __add_preferred_console(char *name, int idx, char *options,
+ 		preferred_console = i;
+ 	strlcpy(c->name, name, sizeof(c->name));
+ 	c->options = options;
+-	c->user_specified = user_specified;
++	set_user_specified(c, user_specified);
+ 	braille_set_options(c, brl_options);
+ 
+ 	c->index = idx;
+@@ -2418,7 +2456,6 @@ static int __init console_setup(char *str)
+ 	*s = 0;
+ 
+ 	__add_preferred_console(buf, idx, options, brl_options, true);
+-	console_set_on_cmdline = 1;
+ 	return 1;
+ }
+ __setup("console=", console_setup);
+@@ -2574,6 +2611,25 @@ static int have_callable_console(void)
+ 	return 0;
+ }
+ 
++/*
++ * Return true when this CPU should unlock console_sem without pushing all
++ * messages to the console. This reduces the chance that the console is
++ * locked when the panic CPU tries to use it.
++ */
++static bool abandon_console_lock_in_panic(void)
++{
++	if (!panic_in_progress())
++		return false;
++
++	/*
++	 * We can use raw_smp_processor_id() here because it is impossible for
++	 * the task to be migrated to the panic_cpu, or away from it. If
++	 * panic_cpu has already been set, and we're not currently executing on
++	 * that CPU, then we never will be.
++	 */
++	return atomic_read(&panic_cpu) != raw_smp_processor_id();
++}
++
+ /*
+  * Can we actually use the console at this time on this cpu?
+  *
+@@ -2604,6 +2660,7 @@ void console_unlock(void)
+ {
+ 	static char ext_text[CONSOLE_EXT_LOG_MAX];
+ 	static char text[CONSOLE_LOG_MAX];
++	static int panic_console_dropped;
+ 	unsigned long flags;
+ 	bool do_cond_resched, retry;
+ 	struct printk_info info;
+@@ -2658,6 +2715,10 @@ void console_unlock(void)
+ 		if (console_seq != r.info->seq) {
+ 			console_dropped += r.info->seq - console_seq;
+ 			console_seq = r.info->seq;
++			if (panic_in_progress() && panic_console_dropped++ > 10) {
++				suppress_panic_printk = 1;
++				pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
++			}
+ 		}
+ 
+ 		if (suppress_message_printing(r.info->level)) {
+@@ -2717,6 +2778,10 @@ void console_unlock(void)
+ 		if (handover)
+ 			return;
+ 
++		/* Allow panic_cpu to take over the consoles safely */
++		if (abandon_console_lock_in_panic())
++			break;
++
+ 		if (do_cond_resched)
+ 			cond_resched();
+ 	}
+@@ -2734,7 +2799,7 @@ void console_unlock(void)
+ 	 * flush, no worries.
+ 	 */
+ 	retry = prb_read_valid(prb, next_seq, NULL);
+-	if (retry && console_trylock())
++	if (retry && !abandon_console_lock_in_panic() && console_trylock())
+ 		goto again;
+ }
+ EXPORT_SYMBOL(console_unlock);
+@@ -3228,7 +3293,7 @@ static DEFINE_PER_CPU(int, printk_pending);
+ 
+ static void wake_up_klogd_work_func(struct irq_work *irq_work)
+ {
+-	int pending = __this_cpu_xchg(printk_pending, 0);
++	int pending = this_cpu_xchg(printk_pending, 0);
+ 
+ 	if (pending & PRINTK_PENDING_OUTPUT) {
+ 		/* If trylock fails, someone else is doing the printing */
+@@ -3264,7 +3329,7 @@ void defer_console_output(void)
+ 		return;
+ 
+ 	preempt_disable();
+-	__this_cpu_or(printk_pending, PRINTK_PENDING_OUTPUT);
++	this_cpu_or(printk_pending, PRINTK_PENDING_OUTPUT);
+ 	irq_work_queue(this_cpu_ptr(&wake_up_klogd_work));
+ 	preempt_enable();
+ }
+diff --git a/kernel/printk/printk_ringbuffer.c b/kernel/printk/printk_ringbuffer.c
+index 8a7b7362c0dd..2b7b6ddab4f7 100644
+--- a/kernel/printk/printk_ringbuffer.c
++++ b/kernel/printk/printk_ringbuffer.c
+@@ -474,8 +474,10 @@ static enum desc_state desc_read(struct prb_desc_ring *desc_ring,
+ 	 * state has been re-checked. A memcpy() for all of @desc
+ 	 * cannot be used because of the atomic_t @state_var field.
+ 	 */
+-	memcpy(&desc_out->text_blk_lpos, &desc->text_blk_lpos,
+-	       sizeof(desc_out->text_blk_lpos)); /* LMM(desc_read:C) */
++	if (desc_out) {
++		memcpy(&desc_out->text_blk_lpos, &desc->text_blk_lpos,
++		       sizeof(desc_out->text_blk_lpos)); /* LMM(desc_read:C) */
++	}
+ 	if (seq_out)
+ 		*seq_out = info->seq; /* also part of desc_read:C */
+ 	if (caller_id_out)
+@@ -528,7 +530,8 @@ static enum desc_state desc_read(struct prb_desc_ring *desc_ring,
+ 	state_val = atomic_long_read(state_var); /* LMM(desc_read:E) */
+ 	d_state = get_desc_state(id, state_val);
+ out:
+-	atomic_long_set(&desc_out->state_var, state_val);
++	if (desc_out)
++		atomic_long_set(&desc_out->state_var, state_val);
+ 	return d_state;
+ }
+ 
+@@ -1449,6 +1452,9 @@ static void desc_make_final(struct prb_desc_ring *desc_ring, unsigned long id)
+ 
+ 	atomic_long_cmpxchg_relaxed(&d->state_var, prev_state_val,
+ 			DESC_SV(id, desc_finalized)); /* LMM(desc_make_final:A) */
++
++	/* Best effort to remember the last finalized @id. */
++	atomic_long_set(&desc_ring->last_finalized_id, id);
+ }
+ 
+ /**
+@@ -1657,7 +1663,12 @@ void prb_commit(struct prb_reserved_entry *e)
+  */
+ void prb_final_commit(struct prb_reserved_entry *e)
+ {
++	struct prb_desc_ring *desc_ring = &e->rb->desc_ring;
++
+ 	_prb_commit(e, desc_finalized);
++
++	/* Best effort to remember the last finalized @id. */
++	atomic_long_set(&desc_ring->last_finalized_id, e->id);
+ }
+ 
+ /*
+@@ -2005,9 +2016,39 @@ u64 prb_first_valid_seq(struct printk_ringbuffer *rb)
+  */
+ u64 prb_next_seq(struct printk_ringbuffer *rb)
+ {
+-	u64 seq = 0;
++	struct prb_desc_ring *desc_ring = &rb->desc_ring;
++	enum desc_state d_state;
++	unsigned long id;
++	u64 seq;
++
++	/* Check if the cached @id still points to a valid @seq. */
++	id = atomic_long_read(&desc_ring->last_finalized_id);
++	d_state = desc_read(desc_ring, id, NULL, &seq, NULL);
+ 
+-	/* Search forward from the oldest descriptor. */
++	if (d_state == desc_finalized || d_state == desc_reusable) {
++		/*
++		 * Begin searching after the last finalized record.
++		 *
++		 * On 0, the search must begin at 0 because of hack#2
++		 * of the bootstrapping phase it is not known if a
++		 * record at index 0 exists.
++		 */
++		if (seq != 0)
++			seq++;
++	} else {
++		/*
++		 * The information about the last finalized sequence number
++		 * has gone. It should happen only when there is a flood of
++		 * new messages and the ringbuffer is rapidly recycled.
++		 * Give up and start from the beginning.
++		 */
++		seq = 0;
++	}
++
++	/*
++	 * The information about the last finalized @seq might be inaccurate.
++	 * Search forward to find the current one.
++	 */
+ 	while (_prb_read_valid(rb, &seq, NULL, NULL))
+ 		seq++;
+ 
+@@ -2044,6 +2085,7 @@ void prb_init(struct printk_ringbuffer *rb,
+ 	rb->desc_ring.infos = infos;
+ 	atomic_long_set(&rb->desc_ring.head_id, DESC0_ID(descbits));
+ 	atomic_long_set(&rb->desc_ring.tail_id, DESC0_ID(descbits));
++	atomic_long_set(&rb->desc_ring.last_finalized_id, DESC0_ID(descbits));
+ 
+ 	rb->text_data_ring.size_bits = textbits;
+ 	rb->text_data_ring.data = text_buf;
+diff --git a/kernel/printk/printk_ringbuffer.h b/kernel/printk/printk_ringbuffer.h
+index 73cc80e01cef..18cd25e489b8 100644
+--- a/kernel/printk/printk_ringbuffer.h
++++ b/kernel/printk/printk_ringbuffer.h
+@@ -75,6 +75,7 @@ struct prb_desc_ring {
+ 	struct printk_info	*infos;
+ 	atomic_long_t		head_id;
+ 	atomic_long_t		tail_id;
++	atomic_long_t		last_finalized_id;
+ };
+ 
+ /*
+@@ -258,6 +259,7 @@ static struct printk_ringbuffer name = {							\
+ 		.infos		= &_##name##_infos[0],						\
+ 		.head_id	= ATOMIC_INIT(DESC0_ID(descbits)),				\
+ 		.tail_id	= ATOMIC_INIT(DESC0_ID(descbits)),				\
++		.last_finalized_id = ATOMIC_INIT(DESC0_ID(descbits)),				\
+ 	},											\
+ 	.text_data_ring = {									\
+ 		.size_bits	= (avgtextbits) + (descbits),					\
+diff --git a/lib/vsprintf.c b/lib/vsprintf.c
+index dde47fd1f357..bbb3e4d5886b 100644
+--- a/lib/vsprintf.c
++++ b/lib/vsprintf.c
+@@ -49,12 +49,16 @@
+ 
+ #include <asm/page.h>		/* for PAGE_SIZE */
+ #include <asm/byteorder.h>	/* cpu_to_le16 */
++#include <asm/unaligned.h>
+ 
+ #include <linux/string_helpers.h>
+ #include "kstrtox.h"
+ 
+-static unsigned long long simple_strntoull(const char *startp, size_t max_chars,
+-					   char **endp, unsigned int base)
++/* Disable pointer hashing if requested */
++bool no_hash_pointers __ro_after_init;
++EXPORT_SYMBOL_GPL(no_hash_pointers);
++
++static noinline unsigned long long simple_strntoull(const char *startp, size_t max_chars, char **endp, unsigned int base)
+ {
+ 	const char *cp;
+ 	unsigned long long result = 0ULL;
+@@ -850,6 +854,19 @@ static char *ptr_to_id(char *buf, char *end, const void *ptr,
+ 	return pointer_string(buf, end, (const void *)hashval, spec);
+ }
+ 
++static char *default_pointer(char *buf, char *end, const void *ptr,
++			     struct printf_spec spec)
++{
++	/*
++	 * default is to _not_ leak addresses, so hash before printing,
++	 * unless no_hash_pointers is specified on the command line.
++	 */
++	if (unlikely(no_hash_pointers))
++		return pointer_string(buf, end, ptr, spec);
++
++	return ptr_to_id(buf, end, ptr, spec);
++}
++
+ int kptr_restrict __read_mostly;
+ 
+ static noinline_for_stack
+@@ -859,7 +876,7 @@ char *restricted_pointer(char *buf, char *end, const void *ptr,
+ 	switch (kptr_restrict) {
+ 	case 0:
+ 		/* Handle as %p, hash and do _not_ leak addresses. */
+-		return ptr_to_id(buf, end, ptr, spec);
++		return default_pointer(buf, end, ptr, spec);
+ 	case 1: {
+ 		const struct cred *cred;
+ 
+@@ -2195,11 +2212,7 @@ char *fwnode_string(char *buf, char *end, struct fwnode_handle *fwnode,
+ 	return widen_string(buf, buf - buf_start, end, spec);
+ }
+ 
+-/* Disable pointer hashing if requested */
+-bool no_hash_pointers __ro_after_init;
+-EXPORT_SYMBOL_GPL(no_hash_pointers);
+-
+-static int __init no_hash_pointers_enable(char *str)
++int __init no_hash_pointers_enable(char *str)
+ {
+ 	if (no_hash_pointers)
+ 		return 0;
+@@ -2422,7 +2435,7 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+ 	case 'e':
+ 		/* %pe with a non-ERR_PTR gets treated as plain %p */
+ 		if (!IS_ERR(ptr))
+-			break;
++			return default_pointer(buf, end, ptr, spec);
+ 		return err_ptr(buf, end, ptr, spec);
+ 	case 'u':
+ 	case 'k':
+@@ -2432,16 +2445,9 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+ 		default:
+ 			return error_string(buf, end, "(einval)", spec);
+ 		}
++	default:
++		return default_pointer(buf, end, ptr, spec);
+ 	}
+-
+-	/*
+-	 * default is to _not_ leak addresses, so hash before printing,
+-	 * unless no_hash_pointers is specified on the command line.
+-	 */
+-	if (unlikely(no_hash_pointers))
+-		return pointer_string(buf, end, ptr, spec);
+-	else
+-		return ptr_to_id(buf, end, ptr, spec);
+ }
+ 
+ /*
+-- 
+2.37.3
+

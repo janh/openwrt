@@ -1,0 +1,120 @@
+From aafabbea8336f237cda843d8e4f88cbbc7d76d3b Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Sat, 3 Sep 2022 19:33:06 +0200
+Subject: [PATCH 40/45] printk: Put seq and dropped into cons_text_desc
+
+Non-BKL consoles have atomic sequence tracking which is not
+compatible with the legacy consoles.
+
+Put sequence and dropped message count into struct cons_text_desc, let
+cons_fill_outbuf() operate on the seq/dropped fields and let the call sites
+handle the update to the corresponding fields in struct console.
+
+This allows sharing cons_fill_outbuf() between the two worlds. For the
+legacy consoles this is not more or less racy than the existing code.
+
+Co-Developed-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h |  2 ++
+ kernel/printk/printk.c  | 25 ++++++++++++++-----------
+ 2 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index 89c859018ec1..a3b42174bce4 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -233,6 +233,7 @@ struct cons_text_buf {
+  * @txtbuf:		Pointer to buffer for storing the text
+  * @outbuf:		Pointer to the position in @buffer for
+  *			writing it out to the device
++ * @seq:		The sequence requested
+  * @dropped:		The dropped count
+  * @len:		Message length
+  * @extmsg:		Select extended format printing
+@@ -240,6 +241,7 @@ struct cons_text_buf {
+ struct cons_outbuf_desc {
+ 	struct cons_text_buf	*txtbuf;
+ 	char			*outbuf;
++	u64			seq;
+ 	unsigned long		dropped;
+ 	unsigned int		len;
+ 	bool			extmsg;
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index db334dbb7df5..8da2ad857913 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -2739,7 +2739,7 @@ static void cons_print_dropped(struct cons_outbuf_desc *desc)
+  * If it is NULL then records have been dropped or skipped and con->seq
+  * has been forwarded so the caller can try to print the next record.
+  */
+-static bool cons_fill_outbuf(struct console *con, struct cons_outbuf_desc *desc)
++static bool cons_fill_outbuf(struct cons_outbuf_desc *desc)
+ {
+ 	static int panic_console_dropped;
+ 
+@@ -2754,12 +2754,12 @@ static bool cons_fill_outbuf(struct console *con, struct cons_outbuf_desc *desc)
+ 
+ 	prb_rec_init_rd(&r, &info, txtbuf->text, CONSOLE_LOG_MAX);
+ 
+-	if (!prb_read_valid(prb, con->seq, &r))
++	if (!prb_read_valid(prb, desc->seq, &r))
+ 		return false;
+ 
+-	if (con->seq != r.info->seq) {
+-		con->dropped += r.info->seq - con->seq;
+-		con->seq = r.info->seq;
++	if (desc->seq != r.info->seq) {
++		desc->dropped += r.info->seq - desc->seq;
++		desc->seq = r.info->seq;
+ 		if (panic_in_progress() && panic_console_dropped++ > 10) {
+ 			suppress_panic_printk = 1;
+ 			pr_warn_once("Too many dropped messages. Suppress messages on non-panic CPUs to prevent livelock.\n");
+@@ -2768,7 +2768,7 @@ static bool cons_fill_outbuf(struct console *con, struct cons_outbuf_desc *desc)
+ 
+ 	/* Skip record that has level above the console loglevel. */
+ 	if (suppress_message_printing(r.info->level)) {
+-		con->seq++;
++		desc->seq++;
+ 		return true;
+ 	}
+ 
+@@ -2788,9 +2788,7 @@ static bool cons_fill_outbuf(struct console *con, struct cons_outbuf_desc *desc)
+ 
+ 		desc->len = len;
+ 		desc->outbuf = txtbuf->text;
+-		desc->dropped = con->dropped;
+ 		cons_print_dropped(desc);
+-		con->dropped = desc->dropped;
+ 	}
+ 
+ 	return true;
+@@ -2819,16 +2817,21 @@ static bool console_emit_next_record(struct console *con, struct cons_text_buf *
+ 				     bool *handover, bool extmsg)
+ {
+ 	struct cons_outbuf_desc desc = {
+-		.txtbuf	= txtbuf,
+-		.extmsg = extmsg,
++		.txtbuf		= txtbuf,
++		.extmsg		= extmsg,
++		.seq		= con->seq,
++		.dropped	= con->dropped,
+ 	};
+ 	unsigned long flags;
+ 
+ 	*handover = false;
+ 
+-	if (!cons_fill_outbuf(con, &desc))
++	if (!cons_fill_outbuf(&desc))
+ 		return false;
+ 
++	con->seq = desc.seq;
++	con->dropped = desc.dropped;
++
+ 	if (!desc.outbuf)
+ 		goto skip;
+ 
+-- 
+2.37.3
+

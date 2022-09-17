@@ -1,0 +1,58 @@
+From 623757add4bf1a4791a68777da723d8c978df66b Mon Sep 17 00:00:00 2001
+From: John Ogness <jogness@linutronix.de>
+Date: Fri, 9 Sep 2022 12:38:55 +0200
+Subject: [PATCH 43/45] printk: Add write context storage for atomic writes
+
+The number of consoles is unknown at compile time and allocating write
+contexts on stack in emergency/panic situations is not desired either.
+
+Allocate a write context array (one for each priority level) along with
+the per CPU output buffers.
+
+Signed-off-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index 1db078fb32d3..61617452bd3c 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -254,6 +254,7 @@ struct cons_outbuf_desc {
+  * @CONS_PRIO_NORMAL:		Regular printk
+  * @CONS_PRIO_EMERGENCY:	Emergency output (WARN/OOPS...)
+  * @CONS_PRIO_PANIC:		Panic output
++ * @CONS_PRIO_MAX:		The number of priority levels
+  *
+  * Emergency output can carefully takeover the console even without consent
+  * of the owner, ideally only when @cons_state::unsafe is not set. Panic
+@@ -266,6 +267,7 @@ enum cons_prio {
+ 	CONS_PRIO_NORMAL,
+ 	CONS_PRIO_EMERGENCY,
+ 	CONS_PRIO_PANIC,
++	CONS_PRIO_MAX,
+ };
+ 
+ struct console;
+@@ -328,12 +330,17 @@ struct cons_write_context {
+ 
+ /**
+  * struct cons_context_data - console context data
++ * @wctxt:		Write context per priority level
+  * @txtbuf:		Buffer for storing the text
+  *
+  * Used for early boot embedded into struct console and for
+  * per CPU data.
++ *
++ * The write contexts are allocated to avoid having them on stack, e.g. in
++ * warn() or panic().
+  */
+ struct cons_context_data {
++	struct cons_write_context	wctxt[CONS_PRIO_MAX];
+ 	struct cons_text_buf		txtbuf;
+ };
+ 
+-- 
+2.37.3
+

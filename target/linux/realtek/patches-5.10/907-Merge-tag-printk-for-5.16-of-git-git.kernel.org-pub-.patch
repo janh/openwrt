@@ -1,0 +1,309 @@
+From 634c6e6278d3d213d5a5ef1fc821fa87abe32578 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Tue, 2 Nov 2021 10:53:45 -0700
+Subject: [PATCH 07/45] Merge tag 'printk-for-5.16' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk updates from Petr Mladek:
+
+ - Extend %pGp print format to print hex value of the page flags
+
+ - Use kvmalloc instead of kmalloc to allocate devkmsg buffers
+
+ - Misc cleanup and warning fixes
+
+* tag 'printk-for-5.16' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  vsprintf: Update %pGp documentation about that it prints hex value
+  lib/vsprintf.c: Amend static asserts for format specifier flags
+  vsprintf: Make %pGp print the hex value
+  test_printf: Append strings more efficiently
+  test_printf: Remove custom appending of '|'
+  test_printf: Remove separate page_flags variable
+  test_printf: Make pft array const
+  ia64: don't do IA64_CMPXCHG_DEBUG without CONFIG_PRINTK
+  printk: use gnu_printf format attribute for printk_sprint()
+  printk: avoid -Wsometimes-uninitialized warning
+  printk: use kvmalloc instead of kmalloc for devkmsg_user
+---
+ Documentation/core-api/printk-formats.rst |  2 +-
+ kernel/printk/index.c                     |  5 +-
+ kernel/printk/printk.c                    |  5 +-
+ lib/test_printf.c                         | 61 ++++++++++-------------
+ lib/vsprintf.c                            | 11 +++-
+ mm/debug.c                                |  2 +-
+ mm/memory-failure.c                       |  8 +--
+ mm/page_owner.c                           |  4 +-
+ mm/slub.c                                 |  4 +-
+ 9 files changed, 50 insertions(+), 52 deletions(-)
+
+diff --git a/Documentation/core-api/printk-formats.rst b/Documentation/core-api/printk-formats.rst
+index 9395975945ed..8a7a13570050 100644
+--- a/Documentation/core-api/printk-formats.rst
++++ b/Documentation/core-api/printk-formats.rst
+@@ -567,7 +567,7 @@ Flags bitfields such as page flags, gfp_flags
+ 
+ ::
+ 
+-	%pGp	referenced|uptodate|lru|active|private|node=0|zone=2|lastcpupid=0x1fffff
++	%pGp	0x17ffffc0002036(referenced|uptodate|lru|active|private|node=0|zone=2|lastcpupid=0x1fffff)
+ 	%pGg	GFP_USER|GFP_DMA32|GFP_NOWARN
+ 	%pGv	read|exec|mayread|maywrite|mayexec|denywrite
+ 
+diff --git a/kernel/printk/index.c b/kernel/printk/index.c
+index d3709408debe..c85be186a783 100644
+--- a/kernel/printk/index.c
++++ b/kernel/printk/index.c
+@@ -26,10 +26,9 @@ static struct pi_entry *pi_get_entry(const struct module *mod, loff_t pos)
+ 	if (mod) {
+ 		entries = mod->printk_index_start;
+ 		nr_entries = mod->printk_index_size;
+-	}
++	} else
+ #endif
+-
+-	if (!mod) {
++	{
+ 		/* vmlinux, comes from linker symbols */
+ 		entries = __start_printk_index;
+ 		nr_entries = __stop_printk_index - __start_printk_index;
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 14751ebd1bc3..cfd580b9b331 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -849,7 +849,7 @@ static int devkmsg_open(struct inode *inode, struct file *file)
+ 			return err;
+ 	}
+ 
+-	user = kmalloc(sizeof(struct devkmsg_user), GFP_KERNEL);
++	user = kvmalloc(sizeof(struct devkmsg_user), GFP_KERNEL);
+ 	if (!user)
+ 		return -ENOMEM;
+ 
+@@ -877,7 +877,7 @@ static int devkmsg_release(struct inode *inode, struct file *file)
+ 	ratelimit_state_exit(&user->rs);
+ 
+ 	mutex_destroy(&user->lock);
+-	kfree(user);
++	kvfree(user);
+ 	return 0;
+ }
+ 
+@@ -2068,6 +2068,7 @@ u16 printk_parse_prefix(const char *text, int *level,
+ 	return prefix_len;
+ }
+ 
++__printf(5, 0)
+ static u16 printk_sprint(char *text, u16 size, int facility,
+ 			 enum printk_info_flags *flags, const char *fmt,
+ 			 va_list args)
+diff --git a/lib/test_printf.c b/lib/test_printf.c
+index a51a3c38d190..21eaa8a038fa 100644
+--- a/lib/test_printf.c
++++ b/lib/test_printf.c
+@@ -586,70 +586,59 @@ struct page_flags_test {
+ 	int width;
+ 	int shift;
+ 	int mask;
+-	unsigned long value;
+ 	const char *fmt;
+ 	const char *name;
+ };
+ 
+-static struct page_flags_test pft[] = {
++static const struct page_flags_test pft[] = {
+ 	{SECTIONS_WIDTH, SECTIONS_PGSHIFT, SECTIONS_MASK,
+-	 0, "%d", "section"},
++	 "%d", "section"},
+ 	{NODES_WIDTH, NODES_PGSHIFT, NODES_MASK,
+-	 0, "%d", "node"},
++	 "%d", "node"},
+ 	{ZONES_WIDTH, ZONES_PGSHIFT, ZONES_MASK,
+-	 0, "%d", "zone"},
++	 "%d", "zone"},
+ 	{LAST_CPUPID_WIDTH, LAST_CPUPID_PGSHIFT, LAST_CPUPID_MASK,
+-	 0, "%#x", "lastcpupid"},
++	 "%#x", "lastcpupid"},
+ 	{KASAN_TAG_WIDTH, KASAN_TAG_PGSHIFT, KASAN_TAG_MASK,
+-	 0, "%#x", "kasantag"},
++	 "%#x", "kasantag"},
+ };
+ 
+ static void __init
+ page_flags_test(int section, int node, int zone, int last_cpupid,
+-		int kasan_tag, int flags, const char *name, char *cmp_buf)
++		int kasan_tag, unsigned long flags, const char *name,
++		char *cmp_buf)
+ {
+ 	unsigned long values[] = {section, node, zone, last_cpupid, kasan_tag};
+-	unsigned long page_flags = 0;
+-	unsigned long size = 0;
++	unsigned long size;
+ 	bool append = false;
+ 	int i;
+ 
+-	flags &= BIT(NR_PAGEFLAGS) - 1;
+-	if (flags) {
+-		page_flags |= flags;
+-		snprintf(cmp_buf + size, BUF_SIZE - size, "%s", name);
+-		size = strlen(cmp_buf);
+-#if SECTIONS_WIDTH || NODES_WIDTH || ZONES_WIDTH || \
+-	LAST_CPUPID_WIDTH || KASAN_TAG_WIDTH
+-		/* Other information also included in page flags */
+-		snprintf(cmp_buf + size, BUF_SIZE - size, "|");
+-		size = strlen(cmp_buf);
+-#endif
+-	}
++	for (i = 0; i < ARRAY_SIZE(values); i++)
++		flags |= (values[i] & pft[i].mask) << pft[i].shift;
+ 
+-	/* Set the test value */
+-	for (i = 0; i < ARRAY_SIZE(pft); i++)
+-		pft[i].value = values[i];
++	size = scnprintf(cmp_buf, BUF_SIZE, "%#lx(", flags);
++	if (flags & PAGEFLAGS_MASK) {
++		size += scnprintf(cmp_buf + size, BUF_SIZE - size, "%s", name);
++		append = true;
++	}
+ 
+ 	for (i = 0; i < ARRAY_SIZE(pft); i++) {
+ 		if (!pft[i].width)
+ 			continue;
+ 
+-		if (append) {
+-			snprintf(cmp_buf + size, BUF_SIZE - size, "|");
+-			size = strlen(cmp_buf);
+-		}
++		if (append)
++			size += scnprintf(cmp_buf + size, BUF_SIZE - size, "|");
+ 
+-		page_flags |= (pft[i].value & pft[i].mask) << pft[i].shift;
+-		snprintf(cmp_buf + size, BUF_SIZE - size, "%s=", pft[i].name);
+-		size = strlen(cmp_buf);
+-		snprintf(cmp_buf + size, BUF_SIZE - size, pft[i].fmt,
+-			 pft[i].value & pft[i].mask);
+-		size = strlen(cmp_buf);
++		size += scnprintf(cmp_buf + size, BUF_SIZE - size, "%s=",
++				pft[i].name);
++		size += scnprintf(cmp_buf + size, BUF_SIZE - size, pft[i].fmt,
++				values[i] & pft[i].mask);
+ 		append = true;
+ 	}
+ 
+-	test(cmp_buf, "%pGp", &page_flags);
++	snprintf(cmp_buf + size, BUF_SIZE - size, ")");
++
++	test(cmp_buf, "%pGp", &flags);
+ }
+ 
+ static void __init
+diff --git a/lib/vsprintf.c b/lib/vsprintf.c
+index fb49991ad0d9..0322605ba3a4 100644
+--- a/lib/vsprintf.c
++++ b/lib/vsprintf.c
+@@ -407,8 +407,9 @@ int num_to_str(char *buf, int size, unsigned long long num, unsigned int width)
+ #define SMALL	32		/* use lowercase in hex (must be 32 == 0x20) */
+ #define SPECIAL	64		/* prefix hex with "0x", octal with "0" */
+ 
++static_assert(SIGN == 1);
+ static_assert(ZEROPAD == ('0' - ' '));
+-static_assert(SMALL == ' ');
++static_assert(SMALL == ('a' ^ 'A'));
+ 
+ enum format_type {
+ 	FORMAT_TYPE_NONE, /* Just a string part */
+@@ -1984,6 +1985,11 @@ char *format_page_flags(char *buf, char *end, unsigned long flags)
+ 	bool append = false;
+ 	int i;
+ 
++	buf = number(buf, end, flags, default_flag_spec);
++	if (buf < end)
++		*buf = '(';
++	buf++;
++
+ 	/* Page flags from the main area. */
+ 	if (main_flags) {
+ 		buf = format_flags(buf, end, main_flags, pageflag_names);
+@@ -2012,6 +2018,9 @@ char *format_page_flags(char *buf, char *end, unsigned long flags)
+ 
+ 		append = true;
+ 	}
++	if (buf < end)
++		*buf = ')';
++	buf++;
+ 
+ 	return buf;
+ }
+diff --git a/mm/debug.c b/mm/debug.c
+index ccca576b2899..5771ec6945aa 100644
+--- a/mm/debug.c
++++ b/mm/debug.c
+@@ -166,7 +166,7 @@ void __dump_page(struct page *page, const char *reason)
+ out_mapping:
+ 	BUILD_BUG_ON(ARRAY_SIZE(pageflag_names) != __NR_PAGEFLAGS + 1);
+ 
+-	pr_warn("%sflags: %#lx(%pGp)%s\n", type, head->flags, &head->flags,
++	pr_warn("%sflags: %pGp%s\n", type, &head->flags,
+ 		page_cma ? " CMA" : "");
+ 
+ hex_only:
+diff --git a/mm/memory-failure.c b/mm/memory-failure.c
+index aef267c6a724..b8cb44ee921c 100644
+--- a/mm/memory-failure.c
++++ b/mm/memory-failure.c
+@@ -1853,14 +1853,14 @@ static int __soft_offline_page(struct page *page)
+ 			if (!list_empty(&pagelist))
+ 				putback_movable_pages(&pagelist);
+ 
+-			pr_info("soft offline: %#lx: %s migration failed %d, type %lx (%pGp)\n",
+-				pfn, msg_page[huge], ret, page->flags, &page->flags);
++			pr_info("soft offline: %#lx: %s migration failed %d, type %pGp\n",
++				pfn, msg_page[huge], ret, &page->flags);
+ 			if (ret > 0)
+ 				ret = -EBUSY;
+ 		}
+ 	} else {
+-		pr_info("soft offline: %#lx: %s isolation failed, page count %d, type %lx (%pGp)\n",
+-			pfn, msg_page[huge], page_count(page), page->flags, &page->flags);
++		pr_info("soft offline: %#lx: %s isolation failed, page count %d, type %pGp\n",
++			pfn, msg_page[huge], page_count(page), &page->flags);
+ 		ret = -EBUSY;
+ 	}
+ 	return ret;
+diff --git a/mm/page_owner.c b/mm/page_owner.c
+index b735a8eafcdb..1d1488c1af58 100644
+--- a/mm/page_owner.c
++++ b/mm/page_owner.c
+@@ -360,12 +360,12 @@ print_page_owner(char __user *buf, size_t count, unsigned long pfn,
+ 	pageblock_mt = get_pageblock_migratetype(page);
+ 	page_mt  = gfp_migratetype(page_owner->gfp_mask);
+ 	ret += snprintf(kbuf + ret, count - ret,
+-			"PFN %lu type %s Block %lu type %s Flags %#lx(%pGp)\n",
++			"PFN %lu type %s Block %lu type %s Flags %pGp\n",
+ 			pfn,
+ 			migratetype_names[page_mt],
+ 			pfn >> pageblock_order,
+ 			migratetype_names[pageblock_mt],
+-			page->flags, &page->flags);
++			&page->flags);
+ 
+ 	if (ret >= count)
+ 		goto err;
+diff --git a/mm/slub.c b/mm/slub.c
+index 84c8e0bb9e76..153773922fae 100644
+--- a/mm/slub.c
++++ b/mm/slub.c
+@@ -639,9 +639,9 @@ void print_tracking(struct kmem_cache *s, void *object)
+ 
+ static void print_page_info(struct page *page)
+ {
+-	pr_err("Slab 0x%p objects=%u used=%u fp=0x%p flags=%#lx(%pGp)\n",
++	pr_err("Slab 0x%p objects=%u used=%u fp=0x%p flags=%pGp\n",
+ 	       page, page->objects, page->inuse, page->freelist,
+-	       page->flags, &page->flags);
++	       &page->flags);
+ 
+ }
+ 
+-- 
+2.37.3
+

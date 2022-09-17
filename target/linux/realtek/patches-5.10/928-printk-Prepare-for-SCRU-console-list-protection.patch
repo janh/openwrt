@@ -1,0 +1,121 @@
+From 723d38425cd2f841fc639cb48e8e4f3d77591e63 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 30 Aug 2022 10:51:44 +0200
+Subject: [PATCH 28/45] printk: Prepare for SCRU console list protection
+
+Provide a SRCU protected variant to walk the console list.
+
+Preperatory change for a new console infrastructure which operates
+independent of console BKL.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h | 14 +++++++++++++-
+ kernel/printk/printk.c  | 16 +++++++++++++---
+ 2 files changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index ee1e098c0618..da73bd3683eb 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -15,7 +15,7 @@
+ #define _LINUX_CONSOLE_H_ 1
+ 
+ #include <linux/atomic.h>
+-#include <linux/list.h>
++#include <linux/rculist.h>
+ #include <linux/types.h>
+ 
+ struct vc_data;
+@@ -162,6 +162,7 @@ struct console {
+ #ifdef CONFIG_LOCKDEP
+ extern void lockdep_assert_console_lock_held(void);
+ extern void lockdep_assert_console_list_lock_held(void);
++extern bool console_srcu_read_lock_is_held(void);
+ #else
+ static inline void lockdep_assert_console_lock_held(void) { }
+ static inline void lockdep_assert_console_list_lock_held(void) { }
+@@ -172,6 +173,17 @@ extern struct hlist_head console_list;
+ extern void console_list_lock(void) __acquires(console_mutex);
+ extern void console_list_unlock(void) __releases(console_mutex);
+ 
++/**
++ * for_each_console_srcu() - Iterator over registered consoles
++ * @con:	struct console pointer used as loop cursor
++ *
++ * Requires console_srcu_read_lock to be held. Can be invoked from
++ * any context.
++ */
++#define for_each_console_srcu(con)					\
++	hlist_for_each_entry_srcu(con, &console_list, node,		\
++				  console_srcu_read_lock_is_held())
++
+ /**
+  * for_each_registered_console() - Iterator over registered consoles
+  * @con:	struct console pointer used as loop cursor
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 62392dabf7cd..881aa7947d38 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -90,6 +90,7 @@ static DEFINE_MUTEX(console_mutex);
+ static DEFINE_SEMAPHORE(console_sem);
+ HLIST_HEAD(console_list);
+ EXPORT_SYMBOL_GPL(console_list);
++DEFINE_STATIC_SRCU(console_srcu);
+ 
+ /*
+  * System may need to suppress printk message under certain
+@@ -118,6 +119,10 @@ void lockdep_assert_console_list_lock_held(void)
+ 	lockdep_assert_held(&console_mutex);
+ }
+ 
++bool console_srcu_read_lock_is_held(void)
++{
++	return srcu_read_lock_held(&console_srcu);
++}
+ #endif
+ 
+ enum devkmsg_log_bits {
+@@ -3226,9 +3231,9 @@ void register_console(struct console *newcon)
+ 	 */
+ 	console_lock();
+ 	if (newcon->flags & CON_CONSDEV || hlist_empty(&console_list))
+-		hlist_add_head(&newcon->node, &console_list);
++		hlist_add_head_rcu(&newcon->node, &console_list);
+ 	else
+-		hlist_add_behind(&newcon->node, console_list.first);
++		hlist_add_behind_rcu(&newcon->node, console_list.first);
+ 
+ 	/* Ensure this flag is always set for the head of the list */
+ 	cons_first()->flags |= CON_CONSDEV;
+@@ -3244,6 +3249,7 @@ void register_console(struct console *newcon)
+ 		newcon->seq = prb_next_seq(prb);
+ 	}
+ 	console_unlock();
++	/* No need to synchronize SRCU here! */
+ 	console_sysfs_notify();
+ 
+ 	/*
+@@ -3289,7 +3295,7 @@ static int console_unregister_locked(struct console *console)
+ 	if (hlist_unhashed(&console->node))
+ 		goto out_unlock;
+ 
+-	hlist_del_init(&console->node);
++	hlist_del_init_rcu(&console->node);
+ 
+ 	/*
+ 	 * <HISTORICAL>
+@@ -3304,6 +3310,10 @@ static int console_unregister_locked(struct console *console)
+ 		cons_first()->flags |= CON_CONSDEV;
+ 
+ 	console_unlock();
++
++	/* Ensure that all SRCU list walks have completed */
++	synchronize_srcu(&console_srcu);
++
+ 	console_sysfs_notify();
+ 
+ 	if (console->exit)
+-- 
+2.37.3
+

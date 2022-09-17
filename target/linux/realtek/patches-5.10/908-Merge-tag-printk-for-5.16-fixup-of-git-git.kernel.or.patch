@@ -1,0 +1,111 @@
+From 02fe78ccdd6a3a6ce2f64aa233b9700e615d0698 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Thu, 18 Nov 2021 10:50:45 -0800
+Subject: [PATCH 08/45] Merge tag 'printk-for-5.16-fixup' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk fixes from Petr Mladek:
+
+ - Try to flush backtraces from other CPUs also on the local one. This
+   was a regression caused by printk_safe buffers removal.
+
+ - Remove header dependency warning.
+
+* tag 'printk-for-5.16-fixup' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  printk: Remove printk.h inclusion in percpu.h
+  printk: restore flushing of NMI buffers on remote CPUs after NMI backtraces
+---
+ arch/powerpc/kernel/watchdog.c | 6 ++++++
+ include/linux/percpu.h         | 1 -
+ include/linux/printk.h         | 4 ++++
+ kernel/printk/printk.c         | 5 +++++
+ lib/nmi_backtrace.c            | 6 ++++++
+ 5 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/arch/powerpc/kernel/watchdog.c b/arch/powerpc/kernel/watchdog.c
+index db40e20d0c54..0649c1d5b4a4 100644
+--- a/arch/powerpc/kernel/watchdog.c
++++ b/arch/powerpc/kernel/watchdog.c
+@@ -188,6 +188,12 @@ static void watchdog_smp_panic(int cpu, u64 tb)
+ 	if (sysctl_hardlockup_all_cpu_backtrace)
+ 		trigger_allbutself_cpu_backtrace();
+ 
++	/*
++	 * Force flush any remote buffers that might be stuck in IRQ context
++	 * and therefore could not run their irq_work.
++	 */
++	printk_trigger_flush();
++
+ 	if (hardlockup_panic)
+ 		nmi_panic(NULL, "Hard LOCKUP");
+ 
+diff --git a/include/linux/percpu.h b/include/linux/percpu.h
+index 5e76af742c80..4fa3000f9c22 100644
+--- a/include/linux/percpu.h
++++ b/include/linux/percpu.h
+@@ -6,7 +6,6 @@
+ #include <linux/preempt.h>
+ #include <linux/smp.h>
+ #include <linux/cpumask.h>
+-#include <linux/printk.h>
+ #include <linux/pfn.h>
+ #include <linux/init.h>
+ 
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index 56d090e53b86..0bfe5619eece 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -196,6 +196,7 @@ __printf(1, 2) void dump_stack_set_arch_desc(const char *fmt, ...);
+ void dump_stack_print_info(const char *log_lvl);
+ void show_regs_print_info(const char *log_lvl);
+ extern asmlinkage void dump_stack(void) __cold;
++void printk_trigger_flush(void);
+ #else
+ static inline __printf(1, 0)
+ int vprintk(const char *s, va_list args)
+@@ -268,6 +269,9 @@ static inline void show_regs_print_info(const char *log_lvl)
+ static inline void dump_stack(void)
+ {
+ }
++static inline void printk_trigger_flush(void)
++{
++}
+ #endif
+ 
+ #ifdef CONFIG_SMP
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index cfd580b9b331..f48686c8d866 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -3257,6 +3257,11 @@ void defer_console_output(void)
+ 	preempt_enable();
+ }
+ 
++void printk_trigger_flush(void)
++{
++	defer_console_output();
++}
++
+ int vprintk_deferred(const char *fmt, va_list args)
+ {
+ 	int r;
+diff --git a/lib/nmi_backtrace.c b/lib/nmi_backtrace.c
+index f9e89001b52e..199ab201d501 100644
+--- a/lib/nmi_backtrace.c
++++ b/lib/nmi_backtrace.c
+@@ -75,6 +75,12 @@ void nmi_trigger_cpumask_backtrace(const cpumask_t *mask,
+ 		touch_softlockup_watchdog();
+ 	}
+ 
++	/*
++	 * Force flush any remote buffers that might be stuck in IRQ context
++	 * and therefore could not run their irq_work.
++	 */
++	printk_trigger_flush();
++
+ 	clear_bit_unlock(0, &backtrace_flag);
+ 	put_cpu();
+ }
+-- 
+2.37.3
+

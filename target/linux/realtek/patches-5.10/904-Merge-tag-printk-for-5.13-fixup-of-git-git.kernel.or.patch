@@ -1,0 +1,35 @@
+From a49dd8d510ce30286cb9d4d57d5b34591a854686 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Fri, 18 Jun 2021 10:50:41 -0700
+Subject: [PATCH 04/45] Merge tag 'printk-for-5.13-fixup' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk fixup from Petr Mladek:
+ "Fix misplaced EXPORT_SYMBOL(vsprintf)"
+
+* tag 'printk-for-5.13-fixup' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  printk: Move EXPORT_SYMBOL() closer to vprintk definition
+---
+ kernel/printk/printk_safe.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/printk/printk_safe.c b/kernel/printk/printk_safe.c
+index 7a1414622051..94232186fccb 100644
+--- a/kernel/printk/printk_safe.c
++++ b/kernel/printk/printk_safe.c
+@@ -391,6 +391,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
+ 	/* No obstacles. */
+ 	return vprintk_default(fmt, args);
+ }
++EXPORT_SYMBOL(vprintk);
+ 
+ void __init printk_safe_init(void)
+ {
+@@ -411,4 +412,3 @@ void __init printk_safe_init(void)
+ 	/* Flush pending messages that did not have scheduled IRQ works. */
+ 	printk_safe_flush();
+ }
+-EXPORT_SYMBOL(vprintk);
+-- 
+2.37.3
+

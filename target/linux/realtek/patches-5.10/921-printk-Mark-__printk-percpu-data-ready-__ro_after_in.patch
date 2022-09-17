@@ -1,0 +1,28 @@
+From fbf5240a070f2f31a198ab98c4c4fa8704a9365c Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Wed, 31 Aug 2022 15:25:20 +0200
+Subject: [PATCH 21/45] printk: Mark __printk percpu data ready __ro_after_init
+
+This variable cannot change post boot.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ kernel/printk/printk.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 9728e8ef62cd..f2da1c950bb7 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -429,7 +429,7 @@ static struct printk_ringbuffer *prb = &printk_rb_static;
+  * per_cpu_areas are initialised. This variable is set to true when
+  * it's safe to access per-CPU data.
+  */
+-static bool __printk_percpu_data_ready __read_mostly;
++static bool __printk_percpu_data_ready __ro_after_init;
+ 
+ bool printk_percpu_data_ready(void)
+ {
+-- 
+2.37.3
+

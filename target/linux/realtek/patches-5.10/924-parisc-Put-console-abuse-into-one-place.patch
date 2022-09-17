@@ -1,0 +1,134 @@
+From 81fbfe599c83bbf75e1965f8564898f0b44161aa Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Mon, 29 Aug 2022 23:21:12 +0200
+Subject: [PATCH 24/45] parisc: Put console abuse into one place
+
+PARISC has a hope based mechanism to restore consoles in case of a HPMC
+(machine check exception) which is scattered over several places.
+
+Move it into one place to make further changes simpler and add comments.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/parisc/include/asm/pdc.h |  2 +-
+ arch/parisc/kernel/pdc_cons.c | 38 ++++++++++++++++++++++++++++-------
+ arch/parisc/kernel/traps.c    | 17 +++++-----------
+ 3 files changed, 37 insertions(+), 20 deletions(-)
+
+diff --git a/arch/parisc/include/asm/pdc.h b/arch/parisc/include/asm/pdc.h
+index b388d8176588..6c6f4533ff75 100644
+--- a/arch/parisc/include/asm/pdc.h
++++ b/arch/parisc/include/asm/pdc.h
+@@ -20,7 +20,7 @@ extern unsigned long parisc_pat_pdc_cap; /* PDC capabilities (PAT) */
+ #define PDC_TYPE_SNAKE		 2 /* Doesn't support SYSTEM_MAP */
+ 
+ void pdc_console_init(void);	/* in pdc_console.c */
+-void pdc_console_restart(void);
++void pdc_console_restart(bool hpmc);
+ 
+ void setup_pdc(void);		/* in inventory.c */
+ 
+diff --git a/arch/parisc/kernel/pdc_cons.c b/arch/parisc/kernel/pdc_cons.c
+index 7ed404c60a9e..4aebc25bf696 100644
+--- a/arch/parisc/kernel/pdc_cons.c
++++ b/arch/parisc/kernel/pdc_cons.c
+@@ -241,20 +241,44 @@ void __init pdc_console_init(void)
+ 
+ 
+ /*
+- * Used for emergencies. Currently only used if an HPMC occurs. If an
+- * HPMC occurs, it is possible that the current console may not be
+- * properly initialised after the PDC IO reset. This routine unregisters
+- * all of the current consoles, reinitializes the pdc console and
+- * registers it.
++ * <Historical comments>
++ *
++ * Used for emergencies.
++ *
++ *  - If an HPMC occurs, it is possible that the current console may not be
++ *    properly initialised after the PDC IO reset. This routine unregisters
++ *    all of the current consoles, reinitializes the pdc console and registers
++ *    it.
++ *
++ *  - Maybe the kernel hasn't booted very far yet and hasn't been able
++ *    to initialize the serial or STI console. In that case we should
++ *    re-enable the pdc console, so that the user will be able to
++ *    identify the problem.
++ *
++ * </Historical comments>
++ *
++ * The above is all wishful thinking:
++ *
++ *  - Invoking [un]register_console() from exception contexts is obviously
++ *    unsafe.
++ *
++ *  - If the HPMC left the machine in unpleasant state and the pdc console
++ *    was already initialized, but later removed due to CON_BOOT then this
++ *    will do nothing.
++ *
++ * Pretend that any of the below works in the same way as we pretend that
++ * any of PARISC works.
+  */
+-
+-void pdc_console_restart(void)
++void pdc_console_restart(bool hpmc)
+ {
+ 	struct console *console;
+ 
+ 	if (pdc_console_initialized)
+ 		return;
+ 
++	if (!hpmc && console_drivers)
++		return;
++
+ 	/* If we've already seen the output, don't bother to print it again */
+ 	if (console_drivers != NULL)
+ 		pdc_cons.flags &= ~CON_PRINTBUFFER;
+diff --git a/arch/parisc/kernel/traps.c b/arch/parisc/kernel/traps.c
+index bce47e0fb692..f3ee0de834e1 100644
+--- a/arch/parisc/kernel/traps.c
++++ b/arch/parisc/kernel/traps.c
+@@ -234,17 +234,12 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
+ 			"                 (__)\\       )\\/\\\n"
+ 			"                  U  ||----w |\n"
+ 			"                     ||     ||\n");
+-	
++
+ 	/* unlock the pdc lock if necessary */
+ 	pdc_emergency_unlock();
+ 
+-	/* maybe the kernel hasn't booted very far yet and hasn't been able 
+-	 * to initialize the serial or STI console. In that case we should 
+-	 * re-enable the pdc console, so that the user will be able to 
+-	 * identify the problem. */
+-	if (!console_drivers)
+-		pdc_console_restart();
+-	
++	pdc_console_restart(false);
++
+ 	if (err)
+ 		printk(KERN_CRIT "%s (pid %d): %s (code %ld)\n",
+ 			current->comm, task_pid_nr(current), str, err);
+@@ -425,9 +420,7 @@ void parisc_terminate(char *msg, struct pt_regs *regs, int code, unsigned long o
+ 	/* unlock the pdc lock if necessary */
+ 	pdc_emergency_unlock();
+ 
+-	/* restart pdc console if necessary */
+-	if (!console_drivers)
+-		pdc_console_restart();
++	pdc_console_restart(false);
+ 
+ 	/* Not all paths will gutter the processor... */
+ 	switch(code){
+@@ -479,7 +472,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
+ 	int si_code;
+ 
+ 	if (code == 1)
+-	    pdc_console_restart();  /* switch back to pdc if HPMC */
++	    pdc_console_restart(true);  /* switch back to pdc if HPMC */
+ 	else
+ 	    local_irq_enable();
+ 
+-- 
+2.37.3
+

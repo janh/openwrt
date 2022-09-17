@@ -1,0 +1,94 @@
+From dec4e34e2a39bf896c0dacf6816785a9db88ebc3 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 30 Aug 2022 11:51:24 +0200
+Subject: [PATCH 23/45] printk: Convert console list walks for readers to list
+ lock
+
+Facilities which expose console information to sysfs or procfs can use the
+new list protection to keep the list stable. No need to hold console lock.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ drivers/tty/tty_io.c   | 6 +++---
+ fs/proc/consoles.c     | 6 +++---
+ kernel/printk/printk.c | 8 ++++----
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
+index 669aef77a0bd..cf6d1840d373 100644
+--- a/drivers/tty/tty_io.c
++++ b/drivers/tty/tty_io.c
+@@ -3525,8 +3525,8 @@ static ssize_t show_cons_active(struct device *dev,
+ 	struct console *c;
+ 	ssize_t count = 0;
+ 
+-	console_lock();
+-	for_each_console(c) {
++	console_list_lock();
++	for_each_registered_console(c) {
+ 		if (!c->device)
+ 			continue;
+ 		if (!c->write)
+@@ -3550,7 +3550,7 @@ static ssize_t show_cons_active(struct device *dev,
+ 
+ 		count += sprintf(buf + count, "%c", i ? ' ':'\n');
+ 	}
+-	console_unlock();
++	console_list_unlock();
+ 
+ 	return count;
+ }
+diff --git a/fs/proc/consoles.c b/fs/proc/consoles.c
+index dfe6ce3505ce..6775056eecd5 100644
+--- a/fs/proc/consoles.c
++++ b/fs/proc/consoles.c
+@@ -63,8 +63,8 @@ static void *c_start(struct seq_file *m, loff_t *pos)
+ 	struct console *con;
+ 	loff_t off = 0;
+ 
+-	console_lock();
+-	for_each_console(con)
++	console_list_lock();
++	for_each_registered_console(con)
+ 		if (off++ == *pos)
+ 			break;
+ 
+@@ -80,7 +80,7 @@ static void *c_next(struct seq_file *m, void *v, loff_t *pos)
+ 
+ static void c_stop(struct seq_file *m, void *v)
+ {
+-	console_unlock();
++	console_list_unlock();
+ }
+ 
+ static const struct seq_operations consoles_op = {
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index c80bb1debeea..42e22944c55a 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -2984,18 +2984,18 @@ void console_flush_on_panic(enum con_flush_mode mode)
+  */
+ struct tty_driver *console_device(int *index)
+ {
+-	struct console *c;
+ 	struct tty_driver *driver = NULL;
++	struct console *c;
+ 
+-	console_lock();
+-	for_each_console(c) {
++	console_list_lock();
++	for_each_registered_console(c) {
+ 		if (!c->device)
+ 			continue;
+ 		driver = c->device(c, index);
+ 		if (driver)
+ 			break;
+ 	}
+-	console_unlock();
++	console_list_unlock();
+ 	return driver;
+ }
+ 
+-- 
+2.37.3
+

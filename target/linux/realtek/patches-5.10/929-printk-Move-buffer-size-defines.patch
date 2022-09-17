@@ -1,0 +1,82 @@
+From ff351fe9daf7dc736facdbf577926889a78df2db Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Wed, 31 Aug 2022 10:38:36 +0200
+Subject: [PATCH 29/45] printk: Move buffer size defines
+
+Move the buffer size defines to console.h in preperation of adding a buffer
+structure.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h | 14 ++++++++++++++
+ include/linux/printk.h  |  2 --
+ kernel/printk/printk.c  |  8 --------
+ 3 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index da73bd3683eb..ed6dc01598aa 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -123,6 +123,20 @@ static inline int con_debug_leave(void)
+ #define CM_ERASE    (2)
+ #define CM_MOVE     (3)
+ 
++#ifdef CONFIG_PRINTK
++/* The maximum size of a formatted record (i.e. with prefix added per line) */
++#define CONSOLE_LOG_MAX		1024
++
++/* The maximum size for a dropped text message */
++#define DROPPED_TEXT_MAX	64
++#else
++#define CONSOLE_LOG_MAX		0
++#define DROPPED_TEXT_MAX	0
++#endif
++
++/* The maximum size of an formatted extended record */
++#define CONSOLE_EXT_LOG_MAX	8192
++
+ /*
+  * The interface for a console, or any other device that wants to capture
+  * console messages (printer driver?)
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index e6a4a8724b56..9a3cac423740 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -44,8 +44,6 @@ static inline const char *printk_skip_headers(const char *buffer)
+ 	return buffer;
+ }
+ 
+-#define CONSOLE_EXT_LOG_MAX	8192
+-
+ /* printk's without a loglevel use this.. */
+ #define MESSAGE_LOGLEVEL_DEFAULT CONFIG_MESSAGE_LOGLEVEL_DEFAULT
+ 
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 881aa7947d38..84027119b478 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -427,12 +427,6 @@ static struct latched_seq clear_seq = {
+ #define PREFIX_MAX		32
+ #endif
+ 
+-/* the maximum size of a formatted record (i.e. with prefix added per line) */
+-#define CONSOLE_LOG_MAX		1024
+-
+-/* the maximum size for a dropped text message */
+-#define DROPPED_TEXT_MAX	64
+-
+ /* the maximum size allowed to be reserved for a record */
+ #define LOG_LINE_MAX		(CONSOLE_LOG_MAX - PREFIX_MAX)
+ 
+@@ -2337,8 +2331,6 @@ static bool __pr_flush(struct console *con, int timeout_ms, bool reset_on_progre
+ 
+ #else /* CONFIG_PRINTK */
+ 
+-#define CONSOLE_LOG_MAX		0
+-#define DROPPED_TEXT_MAX	0
+ #define printk_time		false
+ 
+ #define prb_read_valid(rb, seq, r)	false
+-- 
+2.37.3
+

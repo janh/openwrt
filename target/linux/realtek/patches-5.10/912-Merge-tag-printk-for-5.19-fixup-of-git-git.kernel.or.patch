@@ -1,0 +1,32 @@
+From 5eef0b927967b449237eb143696f8a213a1cfbb0 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Thu, 2 Jun 2022 08:49:54 -0700
+Subject: [PATCH 12/45] Merge tag 'printk-for-5.19-fixup' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk fixup from Petr Mladek:
+
+ - Revert inappropriate use of wake_up_interruptible_all() in printk()
+
+* tag 'printk-for-5.19-fixup' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  Revert "printk: wake up all waiters"
+---
+ kernel/printk/printk.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 21921dd72aae..8a44ab03dc85 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -3902,7 +3902,7 @@ static void wake_up_klogd_work_func(struct irq_work *irq_work)
+ 	}
+ 
+ 	if (pending & PRINTK_PENDING_WAKEUP)
+-		wake_up_interruptible_all(&log_wait);
++		wake_up_interruptible(&log_wait);
+ }
+ 
+ static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
+-- 
+2.37.3
+

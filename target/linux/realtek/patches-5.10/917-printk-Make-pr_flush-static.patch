@@ -1,0 +1,74 @@
+From 7bd145fc772f4271f1b34151bb395e0d1c05af72 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 30 Aug 2022 12:01:02 +0200
+Subject: [PATCH 17/45] printk: Make pr_flush() static
+
+No user outside the printk code and no reason to export this.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/printk.h | 7 -------
+ kernel/printk/printk.c | 5 +++--
+ 2 files changed, 3 insertions(+), 9 deletions(-)
+
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index 36710c5ffa10..e6a4a8724b56 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -169,8 +169,6 @@ extern void __printk_safe_exit(void);
+ #define printk_deferred_enter __printk_safe_enter
+ #define printk_deferred_exit __printk_safe_exit
+ 
+-extern bool pr_flush(int timeout_ms, bool reset_on_progress);
+-
+ /*
+  * Please don't use printk_ratelimit(), because it shares ratelimiting state
+  * with all other unrelated printk_ratelimit() callsites.  Instead use
+@@ -224,11 +222,6 @@ static inline void printk_deferred_exit(void)
+ {
+ }
+ 
+-static inline bool pr_flush(int timeout_ms, bool reset_on_progress)
+-{
+-	return true;
+-}
+-
+ static inline int printk_ratelimit(void)
+ {
+ 	return 0;
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 6131ac0b7f2d..194d9d828dbf 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -2295,6 +2295,7 @@ asmlinkage __visible int _printk(const char *fmt, ...)
+ }
+ EXPORT_SYMBOL(_printk);
+ 
++static bool pr_flush(int timeout_ms, bool reset_on_progress);
+ static bool __pr_flush(struct console *con, int timeout_ms, bool reset_on_progress);
+ 
+ #else /* CONFIG_PRINTK */
+@@ -2329,6 +2330,7 @@ static void call_console_driver(struct console *con, const char *text, size_t le
+ {
+ }
+ static bool suppress_message_printing(int level) { return false; }
++static bool pr_flush(int timeout_ms, bool reset_on_progress) { return true; }
+ static bool __pr_flush(struct console *con, int timeout_ms, bool reset_on_progress) { return true; }
+ 
+ #endif /* CONFIG_PRINTK */
+@@ -3436,11 +3438,10 @@ static bool __pr_flush(struct console *con, int timeout_ms, bool reset_on_progre
+  * Context: Process context. May sleep while acquiring console lock.
+  * Return: true if all enabled printers are caught up.
+  */
+-bool pr_flush(int timeout_ms, bool reset_on_progress)
++static bool pr_flush(int timeout_ms, bool reset_on_progress)
+ {
+ 	return __pr_flush(NULL, timeout_ms, reset_on_progress);
+ }
+-EXPORT_SYMBOL(pr_flush);
+ 
+ /*
+  * Delayed printk version, for scheduler-internal messages:
+-- 
+2.37.3
+

@@ -1,0 +1,60 @@
+From 5da4cfe5fe7d200ec9aac3eb7e0d7c95f2c1c9bb Mon Sep 17 00:00:00 2001
+From: John Ogness <jogness@linutronix.de>
+Date: Sat, 10 Sep 2022 00:34:54 +0200
+Subject: [PATCH 45/45] printk: Add atomic write enforcement to warn/panic...
+
+Invoke the atomic write enforcement functions for warn/panic to ensure that
+the information gets out to the consoles.
+
+This is not yet a final solution as this still unlocks consoles and depends
+on the "reliablity" of legacy consoles which are invoked during printk().
+
+Once the legacy is converted over this can be changed to lock consoles on
+entry, print undisturbed and release them on exit.
+
+Signed-off-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ kernel/panic.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/kernel/panic.c b/kernel/panic.c
+index 1f0df42f8d0c..2e0071897d9f 100644
+--- a/kernel/panic.c
++++ b/kernel/panic.c
+@@ -213,6 +213,12 @@ void panic(const char *fmt, ...)
+ 	if (old_cpu != PANIC_CPU_INVALID && old_cpu != this_cpu)
+ 		panic_smp_self_stop();
+ 
++	/*
++	 * No point in saving the previous printk severity level
++	 * here. Panic won't come back
++	 */
++	cons_atomic_enter(CONS_PRIO_PANIC);
++
+ 	console_verbose();
+ 	bust_spinlocks(1);
+ 	va_start(args, fmt);
+@@ -573,6 +579,10 @@ struct warn_args {
+ void __warn(const char *file, int line, void *caller, unsigned taint,
+ 	    struct pt_regs *regs, struct warn_args *args)
+ {
++	enum cons_prio prev_prio;
++
++	prev_prio = cons_atomic_enter(CONS_PRIO_EMERGENCY);
++
+ 	disable_trace_on_warning();
+ 
+ 	if (file)
+@@ -611,6 +621,8 @@ void __warn(const char *file, int line, void *caller, unsigned taint,
+ 
+ 	/* Just a warning, don't kill lockdep. */
+ 	add_taint(taint, LOCKDEP_STILL_OK);
++
++	cons_atomic_exit(CONS_PRIO_EMERGENCY, prev_prio);
+ }
+ 
+ #ifndef __WARN_FLAGS
+-- 
+2.37.3
+

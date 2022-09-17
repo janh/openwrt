@@ -1,0 +1,244 @@
+From 1d46f789f3e85088794aa72ddb4557535283ed4b Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 6 Sep 2022 15:26:12 +0200
+Subject: [PATCH 37/45] printk: Add buffer management for noBKL consoles
+
+In case of hostile takeovers it must be ensured that the previous owner
+cannot scribble over the output buffer of the emergency/panic context. This
+is achieved by:
+
+ - Allocating per CPU output buffers per console and add the required handling
+   into the acquire/release functions.
+
+ - Adding a single instance to struct console for early boot (pre per CPU
+   data being available). The builtin instance is also used for threaded
+   printing once printer threads become available.
+
+Wrapped into a seperate data structure so other context related fields can
+be added in later steps.
+
+Co-Developed-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: John Ogness <jogness@linutronix.de>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/console.h      | 21 ++++++++++-
+ kernel/printk/printk.c       | 18 +++++++---
+ kernel/printk/printk_nobkl.c | 69 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 102 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/console.h b/include/linux/console.h
+index dac44fe5139a..e1b18978233a 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -277,6 +277,7 @@ struct console;
+  * @req_state:		The request state for spin and cleanup
+  * @spinwait_max_us:	Limit for spinwait acquire
+  * @prio:		Priority of the context
++ * @txtbuf:		Pointer to the text buffer for this context
+  * @thread:		The acquire is printk thread context
+  * @hostile:		Hostile takeover requested. Cleared on normal
+  *			acquire or friendly handover
+@@ -290,11 +291,25 @@ struct cons_context {
+ 	struct cons_state	req_state;
+ 	unsigned int		spinwait_max_us;
+ 	enum cons_prio		prio;
++	struct cons_text_buf	*txtbuf;
+ 	unsigned int		thread		: 1;
+ 	unsigned int		hostile		: 1;
+ 	unsigned int		spinwait	: 1;
+ };
+ 
++#define CONS_MAX_NEST_LVL	8
++
++/**
++ * struct cons_context_data - console context data
++ * @txtbuf:		Buffer for storing the text
++ *
++ * Used for early boot embedded into struct console and for
++ * per CPU data.
++ */
++struct cons_context_data {
++	struct cons_text_buf		txtbuf;
++};
++
+ /**
+  * struct console - The console descriptor structure
+  * @name:		The name of the console driver
+@@ -316,6 +331,8 @@ struct cons_context {
+  * @node:		hlist node for the console list
+  *
+  * @atomic_state:	State array for non-BKL consoles. Real and handover
++ * @pcpu_data:		Pointer to percpu context data
++ * @ctxt_data:		Builtin context data for early boot and threaded printing
+  */
+ struct console {
+ 	char			name[16];
+@@ -337,8 +354,10 @@ struct console {
+ 	struct hlist_node	node;
+ 
+ 	/* NOBKL console specific members */
+-	atomic_long_t __private	atomic_state[2];
++	atomic_long_t __private		atomic_state[2];
+ 
++	struct cons_context_data __percpu	*pcpu_data;
++	struct cons_context_data		ctxt_data;
+ };
+ 
+ #ifdef CONFIG_LOCKDEP
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index a82a439112d5..db334dbb7df5 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -1070,9 +1070,17 @@ static void __init log_buf_add_cpu(void)
+ static inline void log_buf_add_cpu(void) {}
+ #endif /* CONFIG_SMP */
+ 
++static void cons_alloc_percpu_data(struct console *con);
++
+ static void __init set_percpu_data_ready(void)
+ {
++	struct console *con;
++
++	console_list_lock();
++	for_each_registered_console(con)
++		cons_alloc_percpu_data(con);
+ 	__printk_percpu_data_ready = true;
++	console_list_unlock();
+ }
+ 
+ static unsigned int __init add_to_rb(struct printk_ringbuffer *rb,
+@@ -2340,6 +2348,11 @@ static bool __pr_flush(struct console *con, int timeout_ms, bool reset_on_progre
+ 
+ #endif /* !CONFIG_PRINTK */
+ 
++#define con_printk(lvl, con, fmt, ...)			\
++	printk(lvl pr_fmt("%sconsole [%s%d] " fmt),	\
++	       (con->flags & CON_BOOT) ? "boot" : "",	\
++	       con->name, con->index, ##__VA_ARGS__)
++
+ #include "printk_nobkl.c"
+ 
+ #ifdef CONFIG_EARLY_PRINTK
+@@ -3190,11 +3203,6 @@ static void try_enable_default_console(struct console *newcon)
+ 		newcon->flags |= CON_CONSDEV;
+ }
+ 
+-#define con_printk(lvl, con, fmt, ...)			\
+-	printk(lvl pr_fmt("%sconsole [%s%d] " fmt),	\
+-	       (con->flags & CON_BOOT) ? "boot" : "",	\
+-	       con->name, con->index, ##__VA_ARGS__)
+-
+ #define cons_first()					\
+ 	hlist_entry(console_list.first, struct console, node)
+ 
+diff --git a/kernel/printk/printk_nobkl.c b/kernel/printk/printk_nobkl.c
+index 9b8919d6a33c..99d07202f89c 100644
+--- a/kernel/printk/printk_nobkl.c
++++ b/kernel/printk/printk_nobkl.c
+@@ -206,6 +206,43 @@ static inline bool cons_check_panic(void)
+ 	return pcpu != PANIC_CPU_INVALID && pcpu != smp_processor_id();
+ }
+ 
++/**
++ * cons_context_set_text_buf - Set the output text buffer for the current context
++ * @ctxt:	Pointer to the aquire context
++ *
++ * Buffer selection:
++ *   1) Early boot uses the console builtin buffer
++ *   2) Threads use the console builtin buffer
++ *   3) All other context use the per CPU buffers
++ *
++ * This guarantees that there is no concurrency on the output records
++ * ever. Per CPU nesting is not a problem at all. The takeover logic
++ * tells the interrupted context that the buffer has been overwritten.
++ *
++ * There are two critical regions which matter:
++ *
++ * 1) Context is filling the buffer with a record. After interruption
++ *    it continues to sprintf() the record and before it goes to
++ *    write it out, it checks the state, notices the takeover, discards
++ *    the content and backs out.
++ *
++ * 2) Context is in a unsafe critical region in the driver. After
++ *    interruption it might read overwritten data from the output
++ *    buffer. When it leaves the critical region it notices and backs
++ *    out. Hostile takeovers in driver critical regions are best effort
++ *    and there is not much which can be done about that.
++ */
++static void cons_context_set_text_buf(struct cons_context *ctxt)
++{
++	struct console *con = ctxt->console;
++
++	/* Early boot or allocation fail? */
++	if (!con->pcpu_data)
++		ctxt->txtbuf = &con->ctxt_data.txtbuf;
++	else
++		ctxt->txtbuf = &(this_cpu_ptr(con->pcpu_data)->txtbuf);
++}
++
+ /**
+  * cons_cleanup_handover - Cleanup a handover request
+  * @ctxt:	Pointer to acquire context
+@@ -482,6 +519,7 @@ static bool __cons_try_acquire(struct cons_context *ctxt)
+ 		return false;
+ success:
+ 	/* Common updates on success */
++	cons_context_set_text_buf(ctxt);
+ 	return true;
+ 
+ check_hostile:
+@@ -609,6 +647,35 @@ static bool __maybe_unused cons_release(struct cons_context *ctxt)
+ 	return ret;
+ }
+ 
++/**
++ * cons_alloc_percpu_data - Allocate percpu data for a console
++ * @con:	Console to allocate for
++ */
++static void cons_alloc_percpu_data(struct console *con)
++{
++	if (!printk_percpu_data_ready())
++		return;
++
++	con->pcpu_data = alloc_percpu(typeof(*con->pcpu_data));
++	if (con->pcpu_data)
++		return;
++
++	con_printk(KERN_WARNING, con, "Failed to allocate percpu buffers\n");
++}
++
++/**
++ * cons_free_percpu_data - Free percpu data of a console on unregister
++ * @con:	Console to clean up
++ */
++static void cons_free_percpu_data(struct console *con)
++{
++	if (!con->pcpu_data)
++		return;
++
++	free_percpu(con->pcpu_data);
++	con->pcpu_data = NULL;
++}
++
+ /**
+  * cons_nobkl_init - Initialize the NOBKL console state
+  * @con:	Console to initialize
+@@ -620,6 +687,7 @@ static void cons_nobkl_init(struct console *con)
+ 		.enabled = !!(con->flags & CON_ENABLED),
+ 	};
+ 
++	cons_alloc_percpu_data(con);
+ 	cons_state_set(con, STATE_REAL, &state);
+ }
+ 
+@@ -632,6 +700,7 @@ static void cons_nobkl_cleanup(struct console *con)
+ 	struct cons_state state = { };
+ 
+ 	cons_state_set(con, STATE_REAL, &state);
++	cons_free_percpu_data(con);
+ }
+ 
+ #else /* CONFIG_PRINTK */
+-- 
+2.37.3
+

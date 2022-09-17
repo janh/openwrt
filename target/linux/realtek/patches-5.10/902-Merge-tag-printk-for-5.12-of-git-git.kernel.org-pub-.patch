@@ -1,0 +1,224 @@
+From 24016e93d71b76c0cc5e2a01c1ae2d281bef5f40 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Mon, 22 Feb 2021 11:04:36 -0800
+Subject: [PATCH 02/45] Merge tag 'printk-for-5.12' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk updates from Petr Mladek:
+
+ - New "no_hash_pointers" kernel parameter causes that %p shows raw
+   pointer values instead of hashed ones. It is intended only for
+   debugging purposes. Misuse is prevented by a fat warning message that
+   is inspired by trace_printk().
+
+ - Prevent a possible deadlock when flushing printk_safe buffers during
+   panic().
+
+ - Fix performance regression caused by the lockless printk ringbuffer.
+   It was visible with huge log buffer and long messages.
+
+ - Documentation fix-up.
+
+* tag 'printk-for-5.12' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  lib/vsprintf: no_hash_pointers prints all addresses as unhashed
+  kselftest: add support for skipped tests
+  lib: use KSTM_MODULE_GLOBALS macro in kselftest drivers
+  printk: avoid prb_first_valid_seq() where possible
+  printk: fix deadlock when kernel panic
+  printk: rectify kernel-doc for prb_rec_init_wr()
+---
+ .../admin-guide/kernel-parameters.txt         | 15 ++++++++
+ kernel/printk/printk_ringbuffer.h             |  2 +-
+ lib/test_bitmap.c                             |  3 +-
+ lib/test_printf.c                             | 12 +++++--
+ lib/vsprintf.c                                | 36 +++++++++++++++++--
+ tools/testing/selftests/kselftest_module.h    | 18 ++++++----
+ 6 files changed, 73 insertions(+), 13 deletions(-)
+
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index f577c29f2093..249fcec95594 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -3326,6 +3326,21 @@
+ 			in certain environments such as networked servers or
+ 			real-time systems.
+ 
++	no_hash_pointers
++			Force pointers printed to the console or buffers to be
++			unhashed.  By default, when a pointer is printed via %p
++			format string, that pointer is "hashed", i.e. obscured
++			by hashing the pointer value.  This is a security feature
++			that hides actual kernel addresses from unprivileged
++			users, but it also makes debugging the kernel more
++			difficult since unequal pointers can no longer be
++			compared.  However, if this command-line option is
++			specified, then all normal pointers will have their true
++			value printed.  Pointers printed via %pK may still be
++			hashed.  This option should only be specified when
++			debugging the kernel.  Please do not use on production
++			kernels.
++
+ 	nohibernate	[HIBERNATION] Disable hibernation and resume.
+ 
+ 	nohz=		[KNL] Boottime enable/disable dynamic ticks
+diff --git a/kernel/printk/printk_ringbuffer.h b/kernel/printk/printk_ringbuffer.h
+index 5dc9d022db07..73cc80e01cef 100644
+--- a/kernel/printk/printk_ringbuffer.h
++++ b/kernel/printk/printk_ringbuffer.h
+@@ -287,7 +287,7 @@ _DEFINE_PRINTKRB(name, descbits, avgtextbits, &_##name##_text[0])
+ /* Writer Interface */
+ 
+ /**
+- * prb_rec_init_wd() - Initialize a buffer for writing records.
++ * prb_rec_init_wr() - Initialize a buffer for writing records.
+  *
+  * @r:             The record to initialize.
+  * @text_buf_size: The needed text buffer size.
+diff --git a/lib/test_bitmap.c b/lib/test_bitmap.c
+index 4425a1dd4ef1..0ea0e8258f14 100644
+--- a/lib/test_bitmap.c
++++ b/lib/test_bitmap.c
+@@ -16,8 +16,7 @@
+ 
+ #include "../tools/testing/selftests/kselftest_module.h"
+ 
+-static unsigned total_tests __initdata;
+-static unsigned failed_tests __initdata;
++KSTM_MODULE_GLOBALS();
+ 
+ static char pbl_buffer[PAGE_SIZE] __initdata;
+ 
+diff --git a/lib/test_printf.c b/lib/test_printf.c
+index 7ac87f18a10f..a6755798e9e6 100644
+--- a/lib/test_printf.c
++++ b/lib/test_printf.c
+@@ -30,11 +30,13 @@
+ #define PAD_SIZE 16
+ #define FILL_CHAR '$'
+ 
+-static unsigned total_tests __initdata;
+-static unsigned failed_tests __initdata;
++KSTM_MODULE_GLOBALS();
++
+ static char *test_buffer __initdata;
+ static char *alloced_buffer __initdata;
+ 
++extern bool no_hash_pointers;
++
+ static int __printf(4, 0) __init
+ do_test(int bufsize, const char *expect, int elen,
+ 	const char *fmt, va_list ap)
+@@ -301,6 +303,12 @@ plain(void)
+ {
+ 	int err;
+ 
++	if (no_hash_pointers) {
++		pr_warn("skipping plain 'p' tests");
++		skipped_tests += 2;
++		return;
++	}
++
+ 	err = plain_hash();
+ 	if (err) {
+ 		pr_warn("plain 'p' does not appear to be hashed\n");
+diff --git a/lib/vsprintf.c b/lib/vsprintf.c
+index daf32a489dc0..93293eb04df9 100644
+--- a/lib/vsprintf.c
++++ b/lib/vsprintf.c
+@@ -2118,6 +2118,32 @@ char *fwnode_string(char *buf, char *end, struct fwnode_handle *fwnode,
+ 	return widen_string(buf, buf - buf_start, end, spec);
+ }
+ 
++/* Disable pointer hashing if requested */
++bool no_hash_pointers __ro_after_init;
++EXPORT_SYMBOL_GPL(no_hash_pointers);
++
++static int __init no_hash_pointers_enable(char *str)
++{
++	no_hash_pointers = true;
++
++	pr_warn("**********************************************************\n");
++	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
++	pr_warn("**                                                      **\n");
++	pr_warn("** This system shows unhashed kernel memory addresses   **\n");
++	pr_warn("** via the console, logs, and other interfaces. This    **\n");
++	pr_warn("** might reduce the security of your system.            **\n");
++	pr_warn("**                                                      **\n");
++	pr_warn("** If you see this message and you are not debugging    **\n");
++	pr_warn("** the kernel, report this immediately to your system   **\n");
++	pr_warn("** administrator!                                       **\n");
++	pr_warn("**                                                      **\n");
++	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
++	pr_warn("**********************************************************\n");
++
++	return 0;
++}
++early_param("no_hash_pointers", no_hash_pointers_enable);
++
+ /*
+  * Show a '%p' thing.  A kernel extension is that the '%p' is followed
+  * by an extra set of alphanumeric characters that are extended format
+@@ -2325,8 +2351,14 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
+ 		}
+ 	}
+ 
+-	/* default is to _not_ leak addresses, hash before printing */
+-	return ptr_to_id(buf, end, ptr, spec);
++	/*
++	 * default is to _not_ leak addresses, so hash before printing,
++	 * unless no_hash_pointers is specified on the command line.
++	 */
++	if (unlikely(no_hash_pointers))
++		return pointer_string(buf, end, ptr, spec);
++	else
++		return ptr_to_id(buf, end, ptr, spec);
+ }
+ 
+ /*
+diff --git a/tools/testing/selftests/kselftest_module.h b/tools/testing/selftests/kselftest_module.h
+index e8eafaf0941a..e2ea41de3f35 100644
+--- a/tools/testing/selftests/kselftest_module.h
++++ b/tools/testing/selftests/kselftest_module.h
+@@ -11,7 +11,8 @@
+ 
+ #define KSTM_MODULE_GLOBALS()			\
+ static unsigned int total_tests __initdata;	\
+-static unsigned int failed_tests __initdata
++static unsigned int failed_tests __initdata;	\
++static unsigned int skipped_tests __initdata
+ 
+ #define KSTM_CHECK_ZERO(x) do {						\
+ 	total_tests++;							\
+@@ -21,11 +22,16 @@ static unsigned int failed_tests __initdata
+ 	}								\
+ } while (0)
+ 
+-static inline int kstm_report(unsigned int total_tests, unsigned int failed_tests)
++static inline int kstm_report(unsigned int total_tests, unsigned int failed_tests,
++			      unsigned int skipped_tests)
+ {
+-	if (failed_tests == 0)
+-		pr_info("all %u tests passed\n", total_tests);
+-	else
++	if (failed_tests == 0) {
++		if (skipped_tests) {
++			pr_info("skipped %u tests\n", skipped_tests);
++			pr_info("remaining %u tests passed\n", total_tests);
++		} else
++			pr_info("all %u tests passed\n", total_tests);
++	} else
+ 		pr_warn("failed %u out of %u tests\n", failed_tests, total_tests);
+ 
+ 	return failed_tests ? -EINVAL : 0;
+@@ -36,7 +42,7 @@ static int __init __module##_init(void)			\
+ {							\
+ 	pr_info("loaded.\n");				\
+ 	selftest();					\
+-	return kstm_report(total_tests, failed_tests);	\
++	return kstm_report(total_tests, failed_tests, skipped_tests);	\
+ }							\
+ static void __exit __module##_exit(void)		\
+ {							\
+-- 
+2.37.3
+

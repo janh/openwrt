@@ -1,0 +1,178 @@
+From e425c19f20ca8e9da21741ca254ef77a05415204 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Fri, 17 Jun 2022 14:57:42 -0500
+Subject: [PATCH 13/45] Merge tag 'printk-for-5.19-rc3' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk fixes from Petr Mladek:
+ "Make the global console_sem available for CPU that is handling panic()
+  or shutdown.
+
+  This is an old problem when an existing console lock owner might block
+  console output, but it became more visible with the kthreads"
+
+* tag 'printk-for-5.19-rc3' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  printk: Wait for the global console lock when the system is going down
+  printk: Block console kthreads when direct printing will be required
+---
+ include/linux/printk.h      |  5 +++++
+ kernel/panic.c              |  2 ++
+ kernel/printk/internal.h    |  2 ++
+ kernel/printk/printk.c      |  8 +++++++-
+ kernel/printk/printk_safe.c | 32 ++++++++++++++++++++++++++++++++
+ kernel/reboot.c             |  2 ++
+ 6 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/include/linux/printk.h b/include/linux/printk.h
+index 9da33332397d..30128937e960 100644
+--- a/include/linux/printk.h
++++ b/include/linux/printk.h
+@@ -173,6 +173,7 @@ extern void printk_prefer_direct_enter(void);
+ extern void printk_prefer_direct_exit(void);
+ 
+ extern bool pr_flush(int timeout_ms, bool reset_on_progress);
++extern void try_block_console_kthreads(int timeout_ms);
+ 
+ /*
+  * Please don't use printk_ratelimit(), because it shares ratelimiting state
+@@ -240,6 +241,10 @@ static inline bool pr_flush(int timeout_ms, bool reset_on_progress)
+ 	return true;
+ }
+ 
++static inline void try_block_console_kthreads(int timeout_ms)
++{
++}
++
+ static inline int printk_ratelimit(void)
+ {
+ 	return 0;
+diff --git a/kernel/panic.c b/kernel/panic.c
+index bf8229282a88..f11dde7e093a 100644
+--- a/kernel/panic.c
++++ b/kernel/panic.c
+@@ -254,6 +254,7 @@ void panic(const char *fmt, ...)
+ 		 * unfortunately means it may not be hardened to work in a
+ 		 * panic situation.
+ 		 */
++		try_block_console_kthreads(10000);
+ 		smp_send_stop();
+ 	} else {
+ 		/*
+@@ -261,6 +262,7 @@ void panic(const char *fmt, ...)
+ 		 * kmsg_dump, we will need architecture dependent extra
+ 		 * works in addition to stopping other CPUs.
+ 		 */
++		try_block_console_kthreads(10000);
+ 		crash_smp_send_stop();
+ 	}
+ 
+diff --git a/kernel/printk/internal.h b/kernel/printk/internal.h
+index 9f3ed2fdb721..ff053bafaa8b 100644
+--- a/kernel/printk/internal.h
++++ b/kernel/printk/internal.h
+@@ -12,6 +12,8 @@ enum printk_info_flags {
+ 	LOG_CONT	= 8,	/* text is a fragment of a continuation line */
+ };
+ 
++extern bool block_console_kthreads;
++
+ __printf(4, 0)
+ int vprintk_store(int facility, int level,
+ 		  const struct dev_printk_info *dev_info,
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 8a44ab03dc85..6db79bf37ee4 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -249,6 +249,9 @@ static atomic_t console_kthreads_active = ATOMIC_INIT(0);
+ #define console_kthread_printing_exit() \
+ 	atomic_dec(&console_kthreads_active)
+ 
++/* Block console kthreads to avoid processing new messages. */
++bool block_console_kthreads;
++
+ /*
+  * Helper macros to handle lockdep when locking/unlocking console_sem. We use
+  * macros instead of functions so that _RET_IP_ contains useful information.
+@@ -3727,7 +3730,10 @@ static bool printer_should_wake(struct console *con, u64 seq)
+ 		return true;
+ 
+ 	if (con->blocked ||
+-	    console_kthreads_atomically_blocked()) {
++	    console_kthreads_atomically_blocked() ||
++	    block_console_kthreads ||
++	    system_state > SYSTEM_RUNNING ||
++	    oops_in_progress) {
+ 		return false;
+ 	}
+ 
+diff --git a/kernel/printk/printk_safe.c b/kernel/printk/printk_safe.c
+index ef0f9a2044da..caac4de1ea59 100644
+--- a/kernel/printk/printk_safe.c
++++ b/kernel/printk/printk_safe.c
+@@ -8,7 +8,9 @@
+ #include <linux/smp.h>
+ #include <linux/cpumask.h>
+ #include <linux/printk.h>
++#include <linux/console.h>
+ #include <linux/kprobes.h>
++#include <linux/delay.h>
+ 
+ #include "internal.h"
+ 
+@@ -50,3 +52,33 @@ asmlinkage int vprintk(const char *fmt, va_list args)
+ 	return vprintk_default(fmt, args);
+ }
+ EXPORT_SYMBOL(vprintk);
++
++/**
++ * try_block_console_kthreads() - Try to block console kthreads and
++ *	make the global console_lock() avaialble
++ *
++ * @timeout_ms:        The maximum time (in ms) to wait.
++ *
++ * Prevent console kthreads from starting processing new messages. Wait
++ * until the global console_lock() become available.
++ *
++ * Context: Can be called in any context.
++ */
++void try_block_console_kthreads(int timeout_ms)
++{
++	block_console_kthreads = true;
++
++	/* Do not wait when the console lock could not be safely taken. */
++	if (this_cpu_read(printk_context) || in_nmi())
++		return;
++
++	while (timeout_ms > 0) {
++		if (console_trylock()) {
++			console_unlock();
++			return;
++		}
++
++		udelay(1000);
++		timeout_ms -= 1;
++	}
++}
+diff --git a/kernel/reboot.c b/kernel/reboot.c
+index 3b30e383b93c..10e07934995b 100644
+--- a/kernel/reboot.c
++++ b/kernel/reboot.c
+@@ -72,6 +72,7 @@ void kernel_restart_prepare(char *cmd)
+ {
+ 	blocking_notifier_call_chain(&reboot_notifier_list, SYS_RESTART, cmd);
+ 	system_state = SYSTEM_RESTART;
++	try_block_console_kthreads(10000);
+ 	usermodehelper_disable();
+ 	device_shutdown();
+ }
+@@ -260,6 +261,7 @@ static void kernel_shutdown_prepare(enum system_states state)
+ 	blocking_notifier_call_chain(&reboot_notifier_list,
+ 		(state == SYSTEM_HALT) ? SYS_HALT : SYS_POWER_OFF, NULL);
+ 	system_state = state;
++	try_block_console_kthreads(10000);
+ 	usermodehelper_disable();
+ 	device_shutdown();
+ }
+-- 
+2.37.3
+

@@ -1,0 +1,354 @@
+From 55e342fee31ff4a2b729877f05b4852c3c7161b4 Mon Sep 17 00:00:00 2001
+From: Linus Torvalds <torvalds@linux-foundation.org>
+Date: Tue, 11 Jan 2022 09:23:59 -0800
+Subject: [PATCH 09/45] Merge tag 'printk-for-5.17' of
+ git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux
+
+Pull printk updates from Petr Mladek:
+
+ - Remove some twists in the console registration code. It does not
+   change the existing behavior except for one corner case. The proper
+   default console (with tty binding) will be registered again even when
+   it has been removed in the meantime. It is actually a bug fix.
+   Anyway, this modified behavior requires some manual interaction.
+
+ - Optimize gdb extension for huge ring buffers.
+
+ - Do not use atomic operations for a local bitmap variable.
+
+ - Update git links in MAINTAINERS.
+
+* tag 'printk-for-5.17' of git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux:
+  MAINTAIERS/printk: Add link to printk git
+  MAINTAINERS/vsprintf: Update link to printk git tree
+  scripts/gdb: lx-dmesg: read records individually
+  printk/console: Clean up boot console handling in register_console()
+  printk/console: Remove need_default_console variable
+  printk/console: Remove unnecessary need_default_console manipulation
+  printk/console: Rename has_preferred_console to need_default_console
+  printk/console: Split out code that enables default console
+  vsprintf: Use non-atomic bitmap API when applicable
+---
+ MAINTAINERS                |   3 +-
+ kernel/printk/printk.c     | 104 +++++++++++++++++++++----------------
+ lib/vsprintf.c             |   4 +-
+ scripts/gdb/linux/dmesg.py |  35 +++++++------
+ 4 files changed, 80 insertions(+), 66 deletions(-)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 36ca4c925c75..0219f781772f 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -14085,6 +14085,7 @@ M:	Sergey Senozhatsky <senozhatsky@chromium.org>
+ R:	Steven Rostedt <rostedt@goodmis.org>
+ R:	John Ogness <john.ogness@linutronix.de>
+ S:	Maintained
++T:	git git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux.git
+ F:	include/linux/printk.h
+ F:	kernel/printk/
+ 
+@@ -18806,7 +18807,7 @@ M:	Sergey Senozhatsky <senozhatsky@chromium.org>
+ R:	Andy Shevchenko <andriy.shevchenko@linux.intel.com>
+ R:	Rasmus Villemoes <linux@rasmusvillemoes.dk>
+ S:	Maintained
+-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/pmladek/printk.git
++T:	git git://git.kernel.org/pub/scm/linux/kernel/git/printk/linux.git
+ F:	Documentation/core-api/printk-formats.rst
+ F:	lib/test_printf.c
+ F:	lib/test_scanf.c
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index f48686c8d866..f416e264edcf 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -282,7 +282,6 @@ static struct console *exclusive_console;
+ static struct console_cmdline console_cmdline[MAX_CMDLINECONSOLES];
+ 
+ static int preferred_console = -1;
+-static bool has_preferred_console;
+ int console_set_on_cmdline;
+ EXPORT_SYMBOL(console_set_on_cmdline);
+ 
+@@ -2863,7 +2862,8 @@ early_param("keep_bootcon", keep_bootcon_setup);
+  * Care need to be taken with consoles that are statically
+  * enabled such as netconsole
+  */
+-static int try_enable_new_console(struct console *newcon, bool user_specified)
++static int try_enable_preferred_console(struct console *newcon,
++					bool user_specified)
+ {
+ 	struct console_cmdline *c;
+ 	int i, err;
+@@ -2893,10 +2893,8 @@ static int try_enable_new_console(struct console *newcon, bool user_specified)
+ 				return err;
+ 		}
+ 		newcon->flags |= CON_ENABLED;
+-		if (i == preferred_console) {
++		if (i == preferred_console)
+ 			newcon->flags |= CON_CONSDEV;
+-			has_preferred_console = true;
+-		}
+ 		return 0;
+ 	}
+ 
+@@ -2911,6 +2909,21 @@ static int try_enable_new_console(struct console *newcon, bool user_specified)
+ 	return -ENOENT;
+ }
+ 
++/* Try to enable the console unconditionally */
++static void try_enable_default_console(struct console *newcon)
++{
++	if (newcon->index < 0)
++		newcon->index = 0;
++
++	if (newcon->setup && newcon->setup(newcon, NULL) != 0)
++		return;
++
++	newcon->flags |= CON_ENABLED;
++
++	if (newcon->device)
++		newcon->flags |= CON_CONSDEV;
++}
++
+ /*
+  * The console driver calls this routine during kernel initialization
+  * to register the console printing procedure with printk() and to
+@@ -2932,59 +2945,56 @@ static int try_enable_new_console(struct console *newcon, bool user_specified)
+  */
+ void register_console(struct console *newcon)
+ {
+-	struct console *bcon = NULL;
++	struct console *con;
++	bool bootcon_enabled = false;
++	bool realcon_enabled = false;
+ 	int err;
+ 
+-	for_each_console(bcon) {
+-		if (WARN(bcon == newcon, "console '%s%d' already registered\n",
+-					 bcon->name, bcon->index))
++	for_each_console(con) {
++		if (WARN(con == newcon, "console '%s%d' already registered\n",
++					 con->name, con->index))
+ 			return;
+ 	}
+ 
+-	/*
+-	 * before we register a new CON_BOOT console, make sure we don't
+-	 * already have a valid console
+-	 */
+-	if (newcon->flags & CON_BOOT) {
+-		for_each_console(bcon) {
+-			if (!(bcon->flags & CON_BOOT)) {
+-				pr_info("Too late to register bootconsole %s%d\n",
+-					newcon->name, newcon->index);
+-				return;
+-			}
+-		}
++	for_each_console(con) {
++		if (con->flags & CON_BOOT)
++			bootcon_enabled = true;
++		else
++			realcon_enabled = true;
+ 	}
+ 
+-	if (console_drivers && console_drivers->flags & CON_BOOT)
+-		bcon = console_drivers;
+-
+-	if (!has_preferred_console || bcon || !console_drivers)
+-		has_preferred_console = preferred_console >= 0;
++	/* Do not register boot consoles when there already is a real one. */
++	if (newcon->flags & CON_BOOT && realcon_enabled) {
++		pr_info("Too late to register bootconsole %s%d\n",
++			newcon->name, newcon->index);
++		return;
++	}
+ 
+ 	/*
+-	 *	See if we want to use this console driver. If we
+-	 *	didn't select a console we take the first one
+-	 *	that registers here.
++	 * See if we want to enable this console driver by default.
++	 *
++	 * Nope when a console is preferred by the command line, device
++	 * tree, or SPCR.
++	 *
++	 * The first real console with tty binding (driver) wins. More
++	 * consoles might get enabled before the right one is found.
++	 *
++	 * Note that a console with tty binding will have CON_CONSDEV
++	 * flag set and will be first in the list.
+ 	 */
+-	if (!has_preferred_console) {
+-		if (newcon->index < 0)
+-			newcon->index = 0;
+-		if (newcon->setup == NULL ||
+-		    newcon->setup(newcon, NULL) == 0) {
+-			newcon->flags |= CON_ENABLED;
+-			if (newcon->device) {
+-				newcon->flags |= CON_CONSDEV;
+-				has_preferred_console = true;
+-			}
++	if (preferred_console < 0) {
++		if (!console_drivers || !console_drivers->device ||
++		    console_drivers->flags & CON_BOOT) {
++			try_enable_default_console(newcon);
+ 		}
+ 	}
+ 
+ 	/* See if this console matches one we selected on the command line */
+-	err = try_enable_new_console(newcon, true);
++	err = try_enable_preferred_console(newcon, true);
+ 
+ 	/* If not, try to match against the platform default(s) */
+ 	if (err == -ENOENT)
+-		err = try_enable_new_console(newcon, false);
++		err = try_enable_preferred_console(newcon, false);
+ 
+ 	/* printk() messages are not printed to the Braille console. */
+ 	if (err || newcon->flags & CON_BRL)
+@@ -2996,8 +3006,10 @@ void register_console(struct console *newcon)
+ 	 * the real console are the same physical device, it's annoying to
+ 	 * see the beginning boot messages twice
+ 	 */
+-	if (bcon && ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV))
++	if (bootcon_enabled &&
++	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV)) {
+ 		newcon->flags &= ~CON_PRINTBUFFER;
++	}
+ 
+ 	/*
+ 	 *	Put this console in the list - keep the
+@@ -3053,15 +3065,15 @@ void register_console(struct console *newcon)
+ 	pr_info("%sconsole [%s%d] enabled\n",
+ 		(newcon->flags & CON_BOOT) ? "boot" : "" ,
+ 		newcon->name, newcon->index);
+-	if (bcon &&
++	if (bootcon_enabled &&
+ 	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV) &&
+ 	    !keep_bootcon) {
+ 		/* We need to iterate through all boot consoles, to make
+ 		 * sure we print everything out, before we unregister them.
+ 		 */
+-		for_each_console(bcon)
+-			if (bcon->flags & CON_BOOT)
+-				unregister_console(bcon);
++		for_each_console(con)
++			if (con->flags & CON_BOOT)
++				unregister_console(con);
+ 	}
+ }
+ EXPORT_SYMBOL(register_console);
+diff --git a/lib/vsprintf.c b/lib/vsprintf.c
+index 0322605ba3a4..dde47fd1f357 100644
+--- a/lib/vsprintf.c
++++ b/lib/vsprintf.c
+@@ -3520,7 +3520,7 @@ int vsscanf(const char *buf, const char *fmt, va_list args)
+ 				++fmt;
+ 
+ 			for ( ; *fmt && *fmt != ']'; ++fmt, ++len)
+-				set_bit((u8)*fmt, set);
++				__set_bit((u8)*fmt, set);
+ 
+ 			/* no ']' or no character set found */
+ 			if (!*fmt || !len)
+@@ -3530,7 +3530,7 @@ int vsscanf(const char *buf, const char *fmt, va_list args)
+ 			if (negate) {
+ 				bitmap_complement(set, set, 256);
+ 				/* exclude null '\0' byte */
+-				clear_bit(0, set);
++				__clear_bit(0, set);
+ 			}
+ 
+ 			/* match must be non-empty */
+diff --git a/scripts/gdb/linux/dmesg.py b/scripts/gdb/linux/dmesg.py
+index a92c55bd8de5..d5983cf3db7d 100644
+--- a/scripts/gdb/linux/dmesg.py
++++ b/scripts/gdb/linux/dmesg.py
+@@ -44,19 +44,17 @@ class LxDmesg(gdb.Command):
+         sz = prb_desc_ring_type.get_type().sizeof
+         desc_ring = utils.read_memoryview(inf, addr, sz).tobytes()
+ 
+-        # read in descriptor array
++        # read in descriptor count, size, and address
+         off = prb_desc_ring_type.get_type()['count_bits'].bitpos // 8
+         desc_ring_count = 1 << utils.read_u32(desc_ring, off)
+         desc_sz = prb_desc_type.get_type().sizeof
+         off = prb_desc_ring_type.get_type()['descs'].bitpos // 8
+-        addr = utils.read_ulong(desc_ring, off)
+-        descs = utils.read_memoryview(inf, addr, desc_sz * desc_ring_count).tobytes()
++        desc_addr = utils.read_ulong(desc_ring, off)
+ 
+-        # read in info array
++        # read in info size and address
+         info_sz = printk_info_type.get_type().sizeof
+         off = prb_desc_ring_type.get_type()['infos'].bitpos // 8
+-        addr = utils.read_ulong(desc_ring, off)
+-        infos = utils.read_memoryview(inf, addr, info_sz * desc_ring_count).tobytes()
++        info_addr = utils.read_ulong(desc_ring, off)
+ 
+         # read in text data ring structure
+         off = printk_ringbuffer_type.get_type()['text_data_ring'].bitpos // 8
+@@ -64,12 +62,11 @@ class LxDmesg(gdb.Command):
+         sz = prb_data_ring_type.get_type().sizeof
+         text_data_ring = utils.read_memoryview(inf, addr, sz).tobytes()
+ 
+-        # read in text data
++        # read in text data size and address
+         off = prb_data_ring_type.get_type()['size_bits'].bitpos // 8
+         text_data_sz = 1 << utils.read_u32(text_data_ring, off)
+         off = prb_data_ring_type.get_type()['data'].bitpos // 8
+-        addr = utils.read_ulong(text_data_ring, off)
+-        text_data = utils.read_memoryview(inf, addr, text_data_sz).tobytes()
++        text_data_addr = utils.read_ulong(text_data_ring, off)
+ 
+         counter_off = atomic_long_type.get_type()['counter'].bitpos // 8
+ 
+@@ -102,17 +99,20 @@ class LxDmesg(gdb.Command):
+             desc_off = desc_sz * ind
+             info_off = info_sz * ind
+ 
++            desc = utils.read_memoryview(inf, desc_addr + desc_off, desc_sz).tobytes()
++
+             # skip non-committed record
+-            state = 3 & (utils.read_u64(descs, desc_off + sv_off +
+-                                        counter_off) >> desc_flags_shift)
++            state = 3 & (utils.read_u64(desc, sv_off + counter_off) >> desc_flags_shift)
+             if state != desc_committed and state != desc_finalized:
+                 if did == head_id:
+                     break
+                 did = (did + 1) & desc_id_mask
+                 continue
+ 
+-            begin = utils.read_ulong(descs, desc_off + begin_off) % text_data_sz
+-            end = utils.read_ulong(descs, desc_off + next_off) % text_data_sz
++            begin = utils.read_ulong(desc, begin_off) % text_data_sz
++            end = utils.read_ulong(desc, next_off) % text_data_sz
++
++            info = utils.read_memoryview(inf, info_addr + info_off, info_sz).tobytes()
+ 
+             # handle data-less record
+             if begin & 1 == 1:
+@@ -125,16 +125,17 @@ class LxDmesg(gdb.Command):
+                 # skip over descriptor id
+                 text_start = begin + utils.get_long_type().sizeof
+ 
+-                text_len = utils.read_u16(infos, info_off + len_off)
++                text_len = utils.read_u16(info, len_off)
+ 
+                 # handle truncated message
+                 if end - text_start < text_len:
+                     text_len = end - text_start
+ 
+-                text = text_data[text_start:text_start + text_len].decode(
+-                    encoding='utf8', errors='replace')
++                text_data = utils.read_memoryview(inf, text_data_addr + text_start,
++                                                  text_len).tobytes()
++                text = text_data[0:text_len].decode(encoding='utf8', errors='replace')
+ 
+-            time_stamp = utils.read_u64(infos, info_off + ts_off)
++            time_stamp = utils.read_u64(info, ts_off)
+ 
+             for line in text.splitlines():
+                 msg = u"[{time:12.6f}] {line}\n".format(
+-- 
+2.37.3
+

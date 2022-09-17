@@ -1,0 +1,48 @@
+From 9c7a5819c8bea555a0681b89a1a5173bbed430b6 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 30 Aug 2022 11:09:42 +0200
+Subject: [PATCH 19/45] printk: Remove write only variable
+ nr_ext_console_drivers
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ kernel/printk/printk.c | 9 ---------
+ 1 file changed, 9 deletions(-)
+
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 194d9d828dbf..df8c83d2c9b1 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -219,9 +219,6 @@ int devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write,
+ 	return 0;
+ }
+ 
+-/* Number of registered extended console drivers. */
+-static int nr_ext_console_drivers;
+-
+ /*
+  * Helper macros to handle lockdep when locking/unlocking console_sem. We use
+  * macros instead of functions so that _RET_IP_ contains useful information.
+@@ -3187,9 +3184,6 @@ void register_console(struct console *newcon)
+ 		console_drivers->next = newcon;
+ 	}
+ 
+-	if (newcon->flags & CON_EXTENDED)
+-		nr_ext_console_drivers++;
+-
+ 	newcon->dropped = 0;
+ 	if (newcon->flags & CON_PRINTBUFFER) {
+ 		/* Get a consistent copy of @syslog_seq. */
+@@ -3255,9 +3249,6 @@ int unregister_console(struct console *console)
+ 	if (res)
+ 		goto out_disable_unlock;
+ 
+-	if (console->flags & CON_EXTENDED)
+-		nr_ext_console_drivers--;
+-
+ 	/*
+ 	 * If this isn't the last console and it has CON_CONSDEV set, we
+ 	 * need to set it on the next preferred console.
+-- 
+2.37.3
+

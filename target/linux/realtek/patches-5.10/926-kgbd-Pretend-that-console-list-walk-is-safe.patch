@@ -1,0 +1,81 @@
+From d25cac61944455ffa771abebb5fd16d79e4f1884 Mon Sep 17 00:00:00 2001
+From: Thomas Gleixner <tglx@linutronix.de>
+Date: Tue, 30 Aug 2022 01:06:44 +0200
+Subject: [PATCH 26/45] kgbd: Pretend that console list walk is safe
+
+Provide a special list iterator macro for KGDB to allow unprotected list
+walks and add a few comments to explain the hope based approach.
+
+Preperatory change for changing the console list to hlist and adding
+lockdep asserts to regular list walks.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ drivers/tty/serial/kgdboc.c |  5 ++++-
+ include/linux/console.h     | 12 +++++++++++-
+ kernel/debug/kdb/kdb_io.c   |  7 ++++++-
+ 3 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/tty/serial/kgdboc.c b/drivers/tty/serial/kgdboc.c
+index 29fca5c270ff..ba27e8748939 100644
+--- a/drivers/tty/serial/kgdboc.c
++++ b/drivers/tty/serial/kgdboc.c
+@@ -462,10 +462,13 @@ static void kgdboc_earlycon_pre_exp_handler(void)
+ 	 * we have no other choice so we keep using it.  Since not all
+ 	 * serial drivers might be OK with this, print a warning once per
+ 	 * boot if we detect this case.
++	 *
++	 * Pretend that walking the console list is safe...
+ 	 */
+-	for_each_console(con)
++	for_each_console_kgdb(con) {
+ 		if (con == kgdboc_earlycon_io_ops.cons)
+ 			return;
++	}
+ 
+ 	already_warned = true;
+ 	pr_warn("kgdboc_earlycon is still using bootconsole\n");
+diff --git a/include/linux/console.h b/include/linux/console.h
+index ea6d33576b7b..6d84820b8003 100644
+--- a/include/linux/console.h
++++ b/include/linux/console.h
+@@ -185,7 +185,17 @@ extern void console_list_unlock(void) __releases(console_mutex);
+  * Requires console_lock to be held which guarantees that the
+  * list is immutable.
+  */
+-#define for_each_console(con)						\
++#define for_each_console(con) \
++	for (con = console_drivers; con != NULL; con = con->next)
++
++/**
++ * for_each_console_kgdb() - Iterator over registered consoles for KGDB
++ * @con:	struct console pointer used as loop cursor
++ *
++ * Has no serialization requirements and KGDB pretends that this is safe.
++ * Don't use outside of the KGDB fairy tale land!
++ */
++#define for_each_console_kgdb(con)				\
+ 	for (con = console_drivers; con != NULL; con = con->next)
+ 
+ extern int console_set_on_cmdline;
+diff --git a/kernel/debug/kdb/kdb_io.c b/kernel/debug/kdb/kdb_io.c
+index 6735ac36b718..5e143a2c1c70 100644
+--- a/kernel/debug/kdb/kdb_io.c
++++ b/kernel/debug/kdb/kdb_io.c
+@@ -559,7 +559,12 @@ static void kdb_msg_write(const char *msg, int msg_len)
+ 		cp++;
+ 	}
+ 
+-	for_each_console(c) {
++	/*
++	 * This is a completely unprotected list walk designed by the
++	 * wishful thinking departement. See the oops_inprogress comment
++	 * below - especially the encourage section...
++	 */
++	for_each_console_kgdb(c) {
+ 		if (!(c->flags & CON_ENABLED))
+ 			continue;
+ 		if (c == dbg_io_ops->cons)
+-- 
+2.37.3
+
