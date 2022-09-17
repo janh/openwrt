@@ -9,6 +9,14 @@ define Device/d-link_dgs-1210-52
 endef
 TARGET_DEVICES += d-link_dgs-1210-52
 
+define Device/hpe_1920-48g
+  $(Build/hpe_1920)
+  SOC := rtl8393
+  DEVICE_MODEL := 1920-48G (JG927A)
+  H3C_DEVICE_ID := 0x0001002a
+endef
+TARGET_DEVICES += hpe_1920-48g
+
 define Device/panasonic_m48eg-pn28480k
   SOC := rtl8393
   IMAGE_SIZE := 16384k

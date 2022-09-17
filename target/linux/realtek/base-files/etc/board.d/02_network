@@ -31,7 +31,8 @@ label_mac=""
 case $board in
 hpe,1920-8g|\
 hpe,1920-16g|\
-hpe,1920-24g)
+hpe,1920-24g|\
+hpe,1920-48g)
 	label_mac=$(mtd_get_mac_binary factory 0x68)
 	lan_mac=$label_mac
 	mac_count1=$(hexdump -v -n 4 -s 0x110 -e '4 "%d"' $(find_mtd_part factory) 2>/dev/null)
