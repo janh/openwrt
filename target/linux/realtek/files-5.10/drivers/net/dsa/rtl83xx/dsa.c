@@ -967,7 +967,7 @@ static int rtl83xx_mc_group_alloc(struct rtl838x_switch_priv *priv, int port)
 
 	if (priv->is_lagmember[port]) {
 		pr_info("%s: %d is lag slave. ignore\n", __func__, port);
-		return 0;
+		return -1;
 	}
 
 	set_bit(mc_group, priv->mc_group_bm);
