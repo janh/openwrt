@@ -1,0 +1,12 @@
+--- a/net/dsa/slave.c
++++ b/net/dsa/slave.c
+@@ -298,6 +298,9 @@ static int dsa_slave_port_attr_set(struc
+ 	case SWITCHDEV_ATTR_ID_BRIDGE_MROUTER:
+ 		ret = dsa_port_mrouter(dp->cpu_dp, attr->u.mrouter, trans, NULL);
+ 		break;
++	case SWITCHDEV_ATTR_ID_PORT_MROUTER:
++		ret = dsa_port_mrouter(dp, attr->u.mrouter, trans, NULL);
++		break;
+ 	default:
+ 		ret = -EOPNOTSUPP;
+ 		break;

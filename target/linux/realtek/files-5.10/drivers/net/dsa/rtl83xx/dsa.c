@@ -972,14 +972,16 @@ static int rtl83xx_mc_group_alloc(struct rtl838x_switch_priv *priv, int port)
 
 	set_bit(mc_group, priv->mc_group_bm);
 	portmask = BIT_ULL(port);
-	priv->r->write_mcast_pmask(mc_group, portmask);
+
+	priv->mc_group_entries[mc_group] = portmask;
+	priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
 
 	return mc_group;
 }
 
 static u64 rtl83xx_mc_group_add_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
 {
-	u64 portmask = priv->r->read_mcast_pmask(mc_group);
+	u64 portmask = priv->mc_group_entries[mc_group];
 
 	pr_debug("%s: %d\n", __func__, port);
 	if (priv->is_lagmember[port]) {
@@ -987,14 +989,16 @@ static u64 rtl83xx_mc_group_add_port(struct rtl838x_switch_priv *priv, int mc_gr
 		return portmask;
 	}
 	portmask |= BIT_ULL(port);
-	priv->r->write_mcast_pmask(mc_group, portmask);
+
+	priv->mc_group_entries[mc_group] = portmask;
+	priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
 
 	return portmask;
 }
 
 static u64 rtl83xx_mc_group_del_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
 {
-	u64 portmask = priv->r->read_mcast_pmask(mc_group);
+	u64 portmask = priv->mc_group_entries[mc_group];
 
 	pr_debug("%s: %d\n", __func__, port);
 	if (priv->is_lagmember[port]) {
@@ -1002,11 +1006,28 @@ static u64 rtl83xx_mc_group_del_port(struct rtl838x_switch_priv *priv, int mc_gr
 		return portmask;
 	}
 	portmask &= ~BIT_ULL(port);
-	priv->r->write_mcast_pmask(mc_group, portmask);
-	if (!portmask)
+
+	priv->mc_group_entries[mc_group] = portmask;
+	if (portmask) {
+		priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+	} else {
+		priv->r->write_mcast_pmask(mc_group, 0);
 		clear_bit(mc_group, priv->mc_group_bm);
+	}
 
 	return portmask;
+}
+
+static void rtl83xx_mc_group_update_mrouter(struct rtl838x_switch_priv *priv)
+{
+	u64 portmask;
+	int mc_group;
+
+	for (mc_group = 0; mc_group < MAX_MC_GROUPS - 1; mc_group++) {
+		portmask = priv->mc_group_entries[mc_group];
+		if (portmask)
+			priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+	}
 }
 
 static int rtl83xx_port_enable(struct dsa_switch *ds, int port,
@@ -1818,6 +1839,28 @@ out:
 	return err;
 }
 
+static int rtl83xx_port_set_mrouter(struct dsa_switch *ds, int port,
+				      bool mrouter,
+				      struct netlink_ext_ack *extack)
+{
+	struct rtl838x_switch_priv *priv = ds->priv;
+	u64 portmask = priv->mc_router_portmask;
+
+	mutex_lock(&priv->reg_mutex);
+
+	if (mrouter)
+		portmask |= BIT_ULL(port);
+	else
+		portmask &= ~BIT_ULL(port);
+
+	priv->mc_router_portmask = portmask;
+	rtl83xx_mc_group_update_mrouter(priv);
+
+	mutex_unlock(&priv->reg_mutex);
+
+	return 0;
+}
+
 static int rtl83xx_port_mirror_add(struct dsa_switch *ds, int port,
 				   struct dsa_mall_mirror_tc_entry *mirror,
 				   bool ingress)
@@ -2141,6 +2184,7 @@ const struct dsa_switch_ops rtl83xx_switch_ops = {
 	.port_mdb_prepare	= rtl83xx_port_mdb_prepare,
 	.port_mdb_add		= rtl83xx_port_mdb_add,
 	.port_mdb_del		= rtl83xx_port_mdb_del,
+	.port_set_mrouter       = rtl83xx_port_set_mrouter,
 
 	.port_mirror_add	= rtl83xx_port_mirror_add,
 	.port_mirror_del	= rtl83xx_port_mirror_del,
@@ -2194,6 +2238,7 @@ const struct dsa_switch_ops rtl930x_switch_ops = {
 	.port_mdb_prepare	= rtl83xx_port_mdb_prepare,
 	.port_mdb_add		= rtl83xx_port_mdb_add,
 	.port_mdb_del		= rtl83xx_port_mdb_del,
+	.port_set_mrouter       = rtl83xx_port_set_mrouter,
 
 	.port_lag_change	= rtl83xx_port_lag_change,
 	.port_lag_join		= rtl83xx_port_lag_join,
