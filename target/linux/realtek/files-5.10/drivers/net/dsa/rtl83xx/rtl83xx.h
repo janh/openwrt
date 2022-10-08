@@ -72,6 +72,8 @@ int rtl_table_write(struct table_reg *r, int idx);
 inline u16 rtl_table_data(struct table_reg *r, int i);
 inline u32 rtl_table_data_r(struct table_reg *r, int i);
 inline void rtl_table_data_w(struct table_reg *r, u32 v, int i);
+int rtl_table_read_helper(rtl838x_tbl_reg_t r, int t, int idx, u32 *data, int count);
+int rtl_table_write_helper(rtl838x_tbl_reg_t r, int t, int idx, u32 *data, int count);
 
 void __init rtl83xx_setup_qos(struct rtl838x_switch_priv *priv);
 

@@ -189,6 +189,39 @@ inline void rtl_table_data_w(struct table_reg *r, u32 v, int i)
 	sw_w32(v, rtl_table_data(r, i));
 }
 
+int rtl_table_read_helper(rtl838x_tbl_reg_t r, int t, int idx, u32 *data, int count)
+{
+	struct table_reg *q = rtl_table_get(r, t);
+	int err, i;
+
+	err = rtl_table_read(q, idx);
+	if (err)
+		goto out;
+
+	for (i = 0; i < count; i++)
+		data[i] = rtl_table_data_r(q, i);
+
+out:
+	rtl_table_release(q);
+
+	return err;
+}
+
+int rtl_table_write_helper(rtl838x_tbl_reg_t r, int t, int idx, u32 *data, int count)
+{
+	struct table_reg *q = rtl_table_get(r, t);
+	int err, i;
+
+	for (i = 0; i < count; i++)
+		rtl_table_data_w(q, data[i], i);
+
+	err = rtl_table_write(q, idx);
+	rtl_table_release(q);
+
+	return err;
+
+}
+
 /* Port register accessor functions for the RTL838x and RTL930X SoCs */
 void rtl838x_mask_port_reg(u64 clear, u64 set, int reg)
 {
