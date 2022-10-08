@@ -995,9 +995,9 @@ struct rtl838x_reg {
 	int  (*mac_link_spd_sts)(int port);
 	int mac_rx_pause_sts;
 	int mac_tx_pause_sts;
-	u64 (*read_l2_entry_using_hash)(u32 hash, u32 position, struct rtl838x_l2_entry *e);
+	void (*read_l2_entry_using_hash)(u32 hash, u32 position, struct rtl838x_l2_entry *e);
 	void (*write_l2_entry_using_hash)(u32 hash, u32 pos, struct rtl838x_l2_entry *e);
-	u64 (*read_cam)(int idx, struct rtl838x_l2_entry *e);
+	void (*read_cam)(int idx, struct rtl838x_l2_entry *e);
 	void (*write_cam)(int idx, struct rtl838x_l2_entry *e);
 	int vlan_port_tag_sts_ctrl;
 	int (*rtl838x_vlan_port_tag_sts_ctrl)(int port);
@@ -1087,6 +1087,9 @@ struct rtl838x_switch_priv {
 	u16 intf_mtus[MAX_INTF_MTUS];
 	int intf_mtu_count[MAX_INTF_MTUS];
 };
+
+bool rtl83xx_l2_entry_match_seed(struct rtl838x_switch_priv *priv,
+				 struct rtl838x_l2_entry *e, u64 seed);
 
 void rtl838x_dbgfs_init(struct rtl838x_switch_priv *priv);
 void rtl930x_dbgfs_init(struct rtl838x_switch_priv *priv);

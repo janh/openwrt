@@ -479,7 +479,7 @@ static void rtl930x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
  * hash is the id of the bucket and pos is the position of the entry in that bucket
  * The data read from the SoC is filled into rtl838x_l2_entry
  */
-static u64 rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static void rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
 	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 0);
@@ -513,15 +513,13 @@ static u64 rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2
 
 	pr_debug("%s: valid: %d, nh: %d\n", __func__, e->valid, e->next_hop);
 	if (!e->valid)
-		return 0;
+		return;
 
 	mac = ((u64)e->mac[0]) << 40 | ((u64)e->mac[1]) << 32 | ((u64)e->mac[2]) << 24
 		| ((u64)e->mac[3]) << 16 | ((u64)e->mac[4]) << 8 | ((u64)e->mac[5]);
 
 	seed = rtl930x_l2_hash_seed(mac, e->rvid);
 	pr_debug("%s: mac %016llx, seed %016llx\n", __func__, mac, seed);
-	// return vid with concatenated mac as unique id
-	return seed;
 }
 
 static void rtl930x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
@@ -544,7 +542,7 @@ static void rtl930x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_
 	rtl_table_release(q);
 }
 
-static u64 rtl930x_read_cam(int idx, struct rtl838x_l2_entry *e)
+static void rtl930x_read_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
 	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 1);
@@ -557,11 +555,6 @@ static u64 rtl930x_read_cam(int idx, struct rtl838x_l2_entry *e)
 	rtl_table_release(q);
 
 	rtl930x_fill_l2_entry(r, e);
-	if (!e->valid)
-		return 0;
-
-	// return mac with concatenated vid as unique id
-	return ((u64)r[0] << 28) | ((r[1] & 0xffff0000) >> 4) | e->vid;
 }
 
 static void rtl930x_write_cam(int idx, struct rtl838x_l2_entry *e)

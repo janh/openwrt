@@ -628,6 +628,14 @@ int rtl83xx_packet_cntr_alloc(struct rtl838x_switch_priv *priv)
 	return idx;
 }
 
+bool rtl83xx_l2_entry_match_seed(struct rtl838x_switch_priv *priv,
+				 struct rtl838x_l2_entry *e, u64 seed)
+{
+	u64 mac = ether_addr_to_u64(&e->mac[0]);
+
+	return priv->r->l2_hash_seed(mac, e->rvid) == seed;
+}
+
 /*
  * Add an L2 nexthop entry for the L3 routing system / PIE forwarding in the SoC
  * Use VID and MAC in rtl838x_l2_entry to identify either a free slot in the L2 hash table
@@ -641,7 +649,6 @@ int rtl83xx_l2_nexthop_add(struct rtl838x_switch_priv *priv, struct rtl83xx_next
 	u64 seed = priv->r->l2_hash_seed(nh->mac, nh->rvid);
 	u32 key = priv->r->l2_hash_key(priv, seed);
 	int i, idx = -1;
-	u64 entry;
 
 	pr_debug("%s searching for %08llx vid %d with key %d, seed: %016llx\n",
 		__func__, nh->mac, nh->rvid, key, seed);
@@ -652,9 +659,9 @@ int rtl83xx_l2_nexthop_add(struct rtl838x_switch_priv *priv, struct rtl83xx_next
 
 	// Loop over all entries in the hash-bucket and over the second block on 93xx SoCs
 	for (i = 0; i < priv->l2_bucket_size; i++) {
-		entry = priv->r->read_l2_entry_using_hash(key, i, &e);
+		priv->r->read_l2_entry_using_hash(key, i, &e);
 
-		if (!e.valid || ((entry & 0x0fffffffffffffffULL) == seed)) {
+		if (!e.valid || rtl83xx_l2_entry_match_seed(priv, &e, seed)) {
 			idx = i > 3 ? ((key >> 14) & 0xffff) | i >> 1
 					: ((key << 2) | i) & 0xffff;
 			break;

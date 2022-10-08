@@ -1557,16 +1557,15 @@ static int rtl83xx_find_l2_hash_entry(struct rtl838x_switch_priv *priv, u64 seed
 {
 	int i, idx = -1;
 	u32 key = priv->r->l2_hash_key(priv, seed);
-	u64 entry;
 
 	pr_debug("%s: using key %x, for seed %016llx\n", __func__, key, seed);
 	// Loop over all entries in the hash-bucket and over the second block on 93xx SoCs
 	for (i = 0; i < priv->l2_bucket_size; i++) {
-		entry = priv->r->read_l2_entry_using_hash(key, i, e);
+		priv->r->read_l2_entry_using_hash(key, i, e);
 		pr_debug("valid %d, mac %016llx\n", e->valid, ether_addr_to_u64(&e->mac[0]));
 		if (must_exist && !e->valid)
 			continue;
-		if (!e->valid || ((entry & 0x0fffffffffffffffULL) == seed)) {
+		if (!e->valid || rtl83xx_l2_entry_match_seed(priv, e, seed)) {
 			idx = i > 3 ? ((key >> 14) & 0xffff) | i >> 1 : ((key << 2) | i) & 0xffff;
 			break;
 		}
@@ -1585,15 +1584,14 @@ static int rtl83xx_find_l2_cam_entry(struct rtl838x_switch_priv *priv, u64 seed,
 				     bool must_exist, struct rtl838x_l2_entry *e)
 {
 	int i, idx = -1;
-	u64 entry;
 
 	for (i = 0; i < 64; i++) {
-		entry = priv->r->read_cam(i, e);
+		priv->r->read_cam(i, e);
 		if (!must_exist && !e->valid) {
 			if (idx < 0) /* First empty entry? */
 				idx = i;
 			break;
-		} else if ((entry & 0x0fffffffffffffffULL) == seed) {
+		} else if (rtl83xx_l2_entry_match_seed(priv, e, seed)) {
 			pr_debug("Found entry in CAM\n");
 			idx = i;
 			break;
