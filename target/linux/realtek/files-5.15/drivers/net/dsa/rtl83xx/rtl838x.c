@@ -387,7 +387,7 @@ static void rtl838x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
  * hash is the id of the bucket and pos is the position of the entry in that bucket
  * The data read from the SoC is filled into rtl838x_l2_entry
  */
-static u64 rtl838x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static void rtl838x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
 	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 0); /* Access L2 Table 0 */
@@ -400,10 +400,6 @@ static u64 rtl838x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2
 	rtl_table_release(q);
 
 	rtl838x_fill_l2_entry(r, e);
-	if (!e->valid)
-		return 0;
-
-	return (((u64) r[1]) << 32) | (r[2]);  /* mac and vid concatenated as hash seed */
 }
 
 static void rtl838x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
@@ -422,7 +418,7 @@ static void rtl838x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_
 	rtl_table_release(q);
 }
 
-static u64 rtl838x_read_cam(int idx, struct rtl838x_l2_entry *e)
+static void rtl838x_read_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
 	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 1); /* Access L2 Table 1 */
@@ -435,12 +431,9 @@ static u64 rtl838x_read_cam(int idx, struct rtl838x_l2_entry *e)
 
 	rtl838x_fill_l2_entry(r, e);
 	if (!e->valid)
-		return 0;
+		return;
 
 	pr_debug("Found in CAM: R1 %x R2 %x R3 %x\n", r[0], r[1], r[2]);
-
-	/* Return MAC with concatenated VID ac concatenated ID */
-	return (((u64) r[1]) << 32) | r[2];
 }
 
 static void rtl838x_write_cam(int idx, struct rtl838x_l2_entry *e)
