@@ -378,94 +378,75 @@ static void rtl838x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
  * hash is the id of the bucket and pos is the position of the entry in that bucket
  * The data read from the SoC is filled into rtl838x_l2_entry
  */
-static void rtl838x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl838x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 0); // Access L2 Table 0
 	u32 idx = (0 << 14) | (hash << 2) | pos; // Search SRAM, with hash and at pos in bucket
-	int i;
+	int err;
 
-	rtl_table_read(q, idx);
-	for (i= 0; i < 3; i++)
-		r[i] = sw_r32(rtl_table_data(q, i));
-
-	rtl_table_release(q);
+	err = rtl_table_read_helper(RTL8380_TBL_L2, 0, idx, r, 3);
+	if (err)
+		return err;
 
 	rtl838x_fill_l2_entry(r, e);
+
+	return 0;
 }
 
-static void rtl838x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl838x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 0);
-	int i;
-
 	u32 idx = (0 << 14) | (hash << 2) | pos; // Access SRAM, with hash and at pos in bucket
 
 	rtl838x_fill_l2_row(r, e);
 
-	for (i= 0; i < 3; i++)
-		sw_w32(r[i], rtl_table_data(q, i));
-
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL8380_TBL_L2, 0, idx, r, 3);
 }
 
-static void rtl838x_read_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl838x_read_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 1); // Access L2 Table 1
-	int i;
+	int err;
 
-	rtl_table_read(q, idx);
-	for (i= 0; i < 3; i++)
-		r[i] = sw_r32(rtl_table_data(q, i));
-
-	rtl_table_release(q);
+	err = rtl_table_read_helper(RTL8380_TBL_L2, 1, idx, r, 3);
+	if (err)
+		return err;
 
 	rtl838x_fill_l2_entry(r, e);
-	if (!e->valid)
-		return;
 
-	pr_debug("Found in CAM: R1 %x R2 %x R3 %x\n", r[0], r[1], r[2]);
+	if (e->valid)
+		pr_debug("Found in CAM: R1 %x R2 %x R3 %x\n", r[0], r[1], r[2]);
+
+	return 0;
 }
 
-static void rtl838x_write_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl838x_write_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 1); // Access L2 Table 1
-	int i;
 
 	rtl838x_fill_l2_row(r, e);
 
-	for (i= 0; i < 3; i++)
-		sw_w32(r[i], rtl_table_data(q, i));
-
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL8380_TBL_L2, 1, idx, r, 3);
 }
 
-static u64 rtl838x_read_mcast_pmask(int idx)
+static int rtl838x_read_mcast_pmask(int idx, u64 *portmask)
 {
-	u32 portmask;
+	u32 tmp;
+	int err;
+
 	// Read MC_PMSK (2) via register RTL8380_TBL_L2
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 2);
+	err = rtl_table_read_helper(RTL8380_TBL_L2, 2, idx, &tmp, 1);
+	*portmask = tmp;
 
-	rtl_table_read(q, idx);
-	portmask = sw_r32(rtl_table_data(q, 0));
-	rtl_table_release(q);
-
-	return portmask;
+	return err;
 }
 
-static void rtl838x_write_mcast_pmask(int idx, u64 portmask)
+static int rtl838x_write_mcast_pmask(int idx, u64 portmask)
 {
-	// Access MC_PMSK (2) via register RTL8380_TBL_L2
-	struct table_reg *q = rtl_table_get(RTL8380_TBL_L2, 2);
+	u32 tmp = ((u32)portmask) & 0x1fffffff;
 
-	sw_w32(((u32)portmask) & 0x1fffffff, rtl_table_data(q, 0));
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	// Access MC_PMSK (2) via register RTL8380_TBL_L2
+	return rtl_table_write_helper(RTL8380_TBL_L2, 2, idx, &tmp, 1);
 }
 
 static void rtl838x_vlan_profile_setup(int profile)

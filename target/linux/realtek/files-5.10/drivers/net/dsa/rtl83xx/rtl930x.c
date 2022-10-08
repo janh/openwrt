@@ -479,14 +479,13 @@ static void rtl930x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
  * hash is the id of the bucket and pos is the position of the entry in that bucket
  * The data read from the SoC is filled into rtl838x_l2_entry
  */
-static void rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 0);
 	u32 idx;
-	int i;
 	u64 mac;
 	u64 seed;
+	int err;
 
 	pr_debug("%s: hash %08x, pos: %d\n", __func__, hash, pos);
 
@@ -503,31 +502,29 @@ static void rtl930x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l
 	idx = (0 << 14) | (hash << 2) | pos; // Search SRAM, with hash and at pos in bucket
 	pr_debug("%s: NOW hash %08x, pos: %d\n", __func__, hash, pos);
 
-	rtl_table_read(q, idx);
-	for (i = 0; i < 3; i++)
-		r[i] = sw_r32(rtl_table_data(q, i));
-
-	rtl_table_release(q);
+	err = rtl_table_read_helper(RTL9300_TBL_L2, 0, idx, r, 3);
+	if (err)
+		return err;
 
 	rtl930x_fill_l2_entry(r, e);
 
 	pr_debug("%s: valid: %d, nh: %d\n", __func__, e->valid, e->next_hop);
 	if (!e->valid)
-		return;
+		return 0;
 
 	mac = ((u64)e->mac[0]) << 40 | ((u64)e->mac[1]) << 32 | ((u64)e->mac[2]) << 24
 		| ((u64)e->mac[3]) << 16 | ((u64)e->mac[4]) << 8 | ((u64)e->mac[5]);
 
 	seed = rtl930x_l2_hash_seed(mac, e->rvid);
 	pr_debug("%s: mac %016llx, seed %016llx\n", __func__, mac, seed);
+
+	return 0;
 }
 
-static void rtl930x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl930x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 0);
 	u32 idx = (0 << 14) | (hash << 2) | pos; // Access SRAM, with hash and at pos in bucket
-	int i;
 
 	pr_debug("%s: hash %d, pos %d\n", __func__, hash, pos);
 	pr_debug("%s: index %d -> mac %02x:%02x:%02x:%02x:%02x:%02x\n", __func__, idx,
@@ -535,70 +532,54 @@ static void rtl930x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_
 
 	rtl930x_fill_l2_row(r, e);
 
-	for (i= 0; i < 3; i++)
-		sw_w32(r[i], rtl_table_data(q, i));
-
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL9300_TBL_L2, 0, idx, r, 3);
 }
 
-static void rtl930x_read_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl930x_read_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 1);
-	int i;
+	int err;
 
-	rtl_table_read(q, idx);
-	for (i= 0; i < 3; i++)
-		r[i] = sw_r32(rtl_table_data(q, i));
-
-	rtl_table_release(q);
+	err = rtl_table_read_helper(RTL9300_TBL_L2, 1, idx, r, 3);
+	if (err)
+		return err;
 
 	rtl930x_fill_l2_entry(r, e);
+
+	return 0;
 }
 
-static void rtl930x_write_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl930x_write_cam(int idx, struct rtl838x_l2_entry *e)
 {
 	u32 r[3];
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 1); // Access L2 Table 1
-	int i;
 
 	rtl930x_fill_l2_row(r, e);
 
-	for (i= 0; i < 3; i++)
-		sw_w32(r[i], rtl_table_data(q, i));
-
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL9300_TBL_L2, 1, idx, r, 3);
 }
 
-static u64 rtl930x_read_mcast_pmask(int idx)
+static int rtl930x_read_mcast_pmask(int idx, u64 *portmask)
 {
-	u32 portmask;
+	u32 tmp;
+	int err;
+
 	// Read MC_PORTMASK (2) via register RTL9300_TBL_L2
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 2);
+	err = rtl_table_read_helper(RTL9300_TBL_L2, 2, idx, &tmp, 1);
+	*portmask = tmp >> 3;
 
-	rtl_table_read(q, idx);
-	portmask = sw_r32(rtl_table_data(q, 0));
-	portmask >>= 3;
-	rtl_table_release(q);
+	pr_debug("%s: Index idx %d has portmask %08x\n", __func__, idx, (tmp >> 3));
 
-	pr_debug("%s: Index idx %d has portmask %08x\n", __func__, idx, portmask);
-	return portmask;
+	return err;
 }
 
-static void rtl930x_write_mcast_pmask(int idx, u64 portmask)
+static int rtl930x_write_mcast_pmask(int idx, u64 portmask)
 {
-	u32 pm = portmask;
+	u32 tmp = portmask << 3;
+
+	pr_debug("%s: Index idx %d has portmask %08x\n", __func__, idx, tmp);
 
 	// Access MC_PORTMASK (2) via register RTL9300_TBL_L2
-	struct table_reg *q = rtl_table_get(RTL9300_TBL_L2, 2);
-
-	pr_debug("%s: Index idx %d has portmask %08x\n", __func__, idx, pm);
-	pm <<= 3;
-	sw_w32(pm, rtl_table_data(q, 0));
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL9300_TBL_L2, 2, idx, &tmp, 1);
 }
 
 u64 rtl930x_traffic_get(int source)

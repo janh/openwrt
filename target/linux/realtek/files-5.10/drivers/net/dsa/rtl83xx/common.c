@@ -648,7 +648,7 @@ int rtl83xx_l2_nexthop_add(struct rtl838x_switch_priv *priv, struct rtl83xx_next
 	struct rtl838x_l2_entry e;
 	u64 seed = priv->r->l2_hash_seed(nh->mac, nh->rvid);
 	u32 key = priv->r->l2_hash_key(priv, seed);
-	int i, idx = -1;
+	int i, idx = -1, err;
 
 	pr_debug("%s searching for %08llx vid %d with key %d, seed: %016llx\n",
 		__func__, nh->mac, nh->rvid, key, seed);
@@ -659,7 +659,9 @@ int rtl83xx_l2_nexthop_add(struct rtl838x_switch_priv *priv, struct rtl83xx_next
 
 	// Loop over all entries in the hash-bucket and over the second block on 93xx SoCs
 	for (i = 0; i < priv->l2_bucket_size; i++) {
-		priv->r->read_l2_entry_using_hash(key, i, &e);
+		err = priv->r->read_l2_entry_using_hash(key, i, &e);
+		if (err)
+			return err;
 
 		if (!e.valid || rtl83xx_l2_entry_match_seed(priv, &e, seed)) {
 			idx = i > 3 ? ((key >> 14) & 0xffff) | i >> 1
@@ -700,9 +702,8 @@ int rtl83xx_l2_nexthop_add(struct rtl838x_switch_priv *priv, struct rtl83xx_next
 	e.nh_route_id = nh->id;			// NH route ID takes place of VID
 	e.nh_vlan_target = false;
 
-	priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
-
-	return 0;
+	err = priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+	return err;
 }
 
 /*
@@ -715,7 +716,11 @@ int rtl83xx_l2_nexthop_rm(struct rtl838x_switch_priv *priv, struct rtl83xx_nexth
 	struct rtl838x_l2_entry e;
 	u32 key = nh->l2_id >> 2;
 	int i = nh->l2_id & 0x3;
-	u64 entry = entry = priv->r->read_l2_entry_using_hash(key, i, &e);
+	int err;
+
+	err = priv->r->read_l2_entry_using_hash(key, i, &e);
+	if (err)
+		return err;
 
 	pr_debug("%s: id %d, key %d, index %d\n", __func__, nh->l2_id, key, i);
 	if (!e.valid) {
@@ -729,9 +734,8 @@ int rtl83xx_l2_nexthop_rm(struct rtl838x_switch_priv *priv, struct rtl83xx_nexth
 	e.vid = nh->vid;		// Restore VID
 	e.rvid = nh->rvid;
 
-	priv->r->write_l2_entry_using_hash(key, i, &e);
-
-	return 0;
+	err = priv->r->write_l2_entry_using_hash(key, i, &e);
+	return err;
 }
 
 static int rtl83xx_handle_changeupper(struct rtl838x_switch_priv *priv,

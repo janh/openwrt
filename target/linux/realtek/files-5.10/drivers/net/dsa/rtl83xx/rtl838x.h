@@ -995,10 +995,10 @@ struct rtl838x_reg {
 	int  (*mac_link_spd_sts)(int port);
 	int mac_rx_pause_sts;
 	int mac_tx_pause_sts;
-	void (*read_l2_entry_using_hash)(u32 hash, u32 position, struct rtl838x_l2_entry *e);
-	void (*write_l2_entry_using_hash)(u32 hash, u32 pos, struct rtl838x_l2_entry *e);
-	void (*read_cam)(int idx, struct rtl838x_l2_entry *e);
-	void (*write_cam)(int idx, struct rtl838x_l2_entry *e);
+	int (*read_l2_entry_using_hash)(u32 hash, u32 position, struct rtl838x_l2_entry *e);
+	int (*write_l2_entry_using_hash)(u32 hash, u32 pos, struct rtl838x_l2_entry *e);
+	int (*read_cam)(int idx, struct rtl838x_l2_entry *e);
+	int (*write_cam)(int idx, struct rtl838x_l2_entry *e);
 	int vlan_port_tag_sts_ctrl;
 	int (*rtl838x_vlan_port_tag_sts_ctrl)(int port);
 	int (*trk_mbr_ctr)(int group);
@@ -1010,8 +1010,8 @@ struct rtl838x_reg {
 				struct ethtool_eee *e, int port);
 	u64 (*l2_hash_seed)(u64 mac, u32 vid);
 	u32 (*l2_hash_key)(struct rtl838x_switch_priv *priv, u64 seed);
-	u64 (*read_mcast_pmask)(int idx);
-	void (*write_mcast_pmask)(int idx, u64 portmask);
+	int (*read_mcast_pmask)(int idx, u64 *portmask);
+	int (*write_mcast_pmask)(int idx, u64 portmask);
 	void (*vlan_fwd_on_inner)(int port, bool is_set);
 	void (*pie_init)(struct rtl838x_switch_priv *priv);
 	int (*pie_rule_read)(struct rtl838x_switch_priv *priv, int idx, struct  pie_rule *pr);
