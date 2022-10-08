@@ -743,13 +743,13 @@ static void rtl931x_fill_l2_row(u32 r[], struct rtl838x_l2_entry *e)
  * hash is the id of the bucket and pos is the position of the entry in that bucket
  * The data read from the SoC is filled into rtl838x_l2_entry
  */
-static void rtl931x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl931x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[4];
-	struct table_reg *q = rtl_table_get(RTL9310_TBL_0, 0);
 	u32 idx;
 	u64 mac;
 	u64 seed;
+	int err;
 
 	pr_debug("%s: hash %08x, pos: %d\n", __func__, hash, pos);
 
@@ -767,17 +767,15 @@ static void rtl931x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l
 	idx = (0 << 14) | (hash << 2) | pos; /* Search SRAM, with hash and at pos in bucket */
 	pr_debug("%s: NOW hash %08x, pos: %d\n", __func__, hash, pos);
 
-	rtl_table_read(q, idx);
-	for (int i = 0; i < 4; i++)
-		r[i] = sw_r32(rtl_table_data(q, i));
-
-	rtl_table_release(q);
+	err = rtl_table_read_helper(RTL9310_TBL_0, 0, idx, r, 4);
+	if (err)
+		return err;
 
 	rtl931x_fill_l2_entry(r, e);
 
 	pr_debug("%s: valid: %d, nh: %d\n", __func__, e->valid, e->next_hop);
 	if (!e->valid)
-		return;
+		return 0;
 
 	mac = ((u64)e->mac[0]) << 40 |
 	      ((u64)e->mac[1]) << 32 |
@@ -788,20 +786,23 @@ static void rtl931x_read_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l
 
 	seed = rtl931x_l2_hash_seed(mac, e->rvid);
 	pr_debug("%s: mac %016llx, seed %016llx\n", __func__, mac, seed);
+
+	return 0;
 }
 
-static void rtl931x_read_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl931x_read_cam(int idx, struct rtl838x_l2_entry *e)
 {
+	return 0;
 }
 
-static void rtl931x_write_cam(int idx, struct rtl838x_l2_entry *e)
+static int rtl931x_write_cam(int idx, struct rtl838x_l2_entry *e)
 {
+	return 0;
 }
 
-static void rtl931x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
+static int rtl931x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_l2_entry *e)
 {
 	u32 r[4];
-	struct table_reg *q = rtl_table_get(RTL9310_TBL_0, 0);
 	u32 idx = (0 << 14) | (hash << 2) | pos; /* Access SRAM, with hash and at pos in bucket */
 
 	pr_info("%s: hash %d, pos %d\n", __func__, hash, pos);
@@ -811,11 +812,7 @@ static void rtl931x_write_l2_entry_using_hash(u32 hash, u32 pos, struct rtl838x_
 	rtl931x_fill_l2_row(r, e);
 	pr_info("%s: %d: %08x %08x %08x\n", __func__, idx, r[0], r[1], r[2]);
 
-	for (int i = 0; i < 4; i++)
-		sw_w32(r[i], rtl_table_data(q, i));
-
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL9310_TBL_0, 0, idx, r, 4);
 }
 
 static void rtl931x_vlan_fwd_on_inner(int port, bool is_set)
@@ -866,37 +863,27 @@ static void rtl931x_l2_learning_setup(void)
 	sw_w32((0xffff << 3) | FORWARD, RTL931X_L2_LRN_CONSTRT_CTRL);
 }
 
-static u64 rtl931x_read_mcast_pmask(int idx)
+static int rtl931x_read_mcast_pmask(int idx, u64 *portmask)
 {
-	u64 portmask;
-	/* Read MC_PMSK (2) via register RTL9310_TBL_0 */
-	struct table_reg *q = rtl_table_get(RTL9310_TBL_0, 2);
+	int err;
 
-	rtl_table_read(q, idx);
-	portmask = sw_r32(rtl_table_data(q, 0));
-	portmask <<= 32;
-	portmask |= sw_r32(rtl_table_data(q, 1));
-	portmask >>= 7;
-	rtl_table_release(q);
+	/* Read MC_PMSK (2) via register RTL9310_TBL_0 */
+	err = rtl_table_read_helper(RTL9310_TBL_0, 2, idx, (u32 *)portmask, 2);
+	*portmask >>= 7;
+
+	pr_debug("%s: Index idx %d has portmask %016llx\n", __func__, idx, *portmask);
+
+	return err;
+}
+
+static int rtl931x_write_mcast_pmask(int idx, u64 portmask)
+{
+	portmask <<= 7;
 
 	pr_debug("%s: Index idx %d has portmask %016llx\n", __func__, idx, portmask);
 
-	return portmask;
-}
-
-static void rtl931x_write_mcast_pmask(int idx, u64 portmask)
-{
-	u64 pm = portmask;
-
 	/* Access MC_PMSK (2) via register RTL9310_TBL_0 */
-	struct table_reg *q = rtl_table_get(RTL9310_TBL_0, 2);
-
-	pr_debug("%s: Index idx %d has portmask %016llx\n", __func__, idx, pm);
-	pm <<= 7;
-	sw_w32((u32)(pm >> 32), rtl_table_data(q, 0));
-	sw_w32((u32)pm, rtl_table_data(q, 1));
-	rtl_table_write(q, idx);
-	rtl_table_release(q);
+	return rtl_table_write_helper(RTL9310_TBL_0, 2, idx, (u32 *)&portmask, 2);
 }
 
 

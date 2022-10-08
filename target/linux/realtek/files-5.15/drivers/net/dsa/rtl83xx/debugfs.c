@@ -269,10 +269,11 @@ static const struct file_operations drop_counter_fops = {
 	.read = drop_counter_read,
 };
 
-static void l2_table_print_entry(struct seq_file *m, struct rtl838x_switch_priv *priv,
-				 struct rtl838x_l2_entry *e)
+static int l2_table_print_entry(struct seq_file *m, struct rtl838x_switch_priv *priv,
+				struct rtl838x_l2_entry *e)
 {
 	u64 portmask;
+	int err;
 
 	if (e->type == L2_UNICAST) {
 		seq_puts(m, "L2_UNICAST\n");
@@ -311,7 +312,10 @@ static void l2_table_print_entry(struct seq_file *m, struct rtl838x_switch_priv 
 				e->mc_gip, e->mc_sip, e->vid, e->rvid);
 		}
 
-		portmask = priv->r->read_mcast_pmask(e->mc_portmask_index);
+		err = priv->r->read_mcast_pmask(e->mc_portmask_index, &portmask);
+		if (err)
+			return err;
+
 		seq_printf(m, "  index %u ports", e->mc_portmask_index);
 		for (int i = 0; i < 64; i++) {
 			if (portmask & BIT_ULL(i))
@@ -321,6 +325,8 @@ static void l2_table_print_entry(struct seq_file *m, struct rtl838x_switch_priv 
 	}
 
 	seq_puts(m, "\n");
+
+	return 0;
 }
 
 static int l2_table_show(struct seq_file *m, void *v)
@@ -328,37 +334,47 @@ static int l2_table_show(struct seq_file *m, void *v)
 	struct rtl838x_switch_priv *priv = m->private;
 	struct rtl838x_l2_entry e;
 	int bucket, index;
+	int err = 0;
 
 	mutex_lock(&priv->reg_mutex);
 
 	for (int i = 0; i < priv->fib_entries; i++) {
 		bucket = i >> 2;
 		index = i & 0x3;
-		priv->r->read_l2_entry_using_hash(bucket, index, &e);
+		err = priv->r->read_l2_entry_using_hash(bucket, index, &e);
+		if (err)
+			goto out;
 
 		if (!e.valid)
 			continue;
 
 		seq_printf(m, "Hash table bucket %d index %d ", bucket, index);
-		l2_table_print_entry(m, priv, &e);
+		err = l2_table_print_entry(m, priv, &e);
+		if (err)
+			goto out;
 
 		if (!((i + 1) % 64))
 			cond_resched();
 	}
 
 	for (int i = 0; i < 64; i++) {
-		priv->r->read_cam(i, &e);
+		err = priv->r->read_cam(i, &e);
+		if (err)
+			goto out;
 
 		if (!e.valid)
 			continue;
 
 		seq_printf(m, "CAM index %d ", i);
-		l2_table_print_entry(m, priv, &e);
+		err = l2_table_print_entry(m, priv, &e);
+		if (err)
+			goto out;
 	}
 
+out:
 	mutex_unlock(&priv->reg_mutex);
 
-	return 0;
+	return err;
 }
 
 static int l2_table_open(struct inode *inode, struct file *filp)
