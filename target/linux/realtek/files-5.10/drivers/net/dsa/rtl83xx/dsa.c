@@ -117,13 +117,15 @@ static enum dsa_tag_protocol rtl83xx_get_tag_protocol(struct dsa_switch *ds,
 static void rtl83xx_vlan_setup(struct rtl838x_switch_priv *priv)
 {
 	struct rtl838x_vlan_info info;
+	u64 portmask;
 	int i;
 
 	pr_info("In %s\n", __func__);
 
 	priv->r->vlan_profile_setup(0);
 	priv->r->vlan_profile_setup(1);
-	pr_info("UNKNOWN_MC_PMASK: %016llx\n", priv->r->read_mcast_pmask(UNKNOWN_MC_PMASK));
+	priv->r->read_mcast_pmask(UNKNOWN_MC_PMASK, &portmask);
+	pr_info("UNKNOWN_MC_PMASK: %016llx\n", portmask);
 	priv->r->vlan_profile_dump(0);
 
 	info.fid = 0;			// Default Forwarding ID / MSTI
@@ -977,6 +979,7 @@ static int rtl83xx_mc_group_alloc(struct rtl838x_switch_priv *priv, int port)
 {
 	int mc_group = find_first_zero_bit(priv->mc_group_bm, MAX_MC_GROUPS - 1);
 	u64 portmask;
+	int err;
 
 	if (mc_group >= MAX_MC_GROUPS - 1)
 		return -1;
@@ -990,48 +993,57 @@ static int rtl83xx_mc_group_alloc(struct rtl838x_switch_priv *priv, int port)
 	portmask = BIT_ULL(port);
 
 	priv->mc_group_entries[mc_group] = portmask;
-	priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+	err = priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+	if (err) {
+		clear_bit(mc_group, priv->mc_group_bm);
+		return err;
+	}
 
 	return mc_group;
 }
 
-static u64 rtl83xx_mc_group_add_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
+static int rtl83xx_mc_group_add_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
 {
 	u64 portmask = priv->mc_group_entries[mc_group];
 
 	pr_debug("%s: %d\n", __func__, port);
 	if (priv->is_lagmember[port]) {
 		pr_info("%s: %d is lag slave. ignore\n", __func__, port);
-		return portmask;
+		return 0;
 	}
 	portmask |= BIT_ULL(port);
 
 	priv->mc_group_entries[mc_group] = portmask;
-	priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
-
-	return portmask;
+	return priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
 }
 
-static u64 rtl83xx_mc_group_del_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
+/* Returns 1 if the group was deleted entirely, 0 otherwise, negative on error */
+static int rtl83xx_mc_group_del_port(struct rtl838x_switch_priv *priv, int mc_group, int port)
 {
 	u64 portmask = priv->mc_group_entries[mc_group];
+	int ret = 0, err;
 
 	pr_debug("%s: %d\n", __func__, port);
 	if (priv->is_lagmember[port]) {
 		pr_info("%s: %d is lag slave. ignore\n", __func__, port);
-		return portmask;
+		return 0;
 	}
 	portmask &= ~BIT_ULL(port);
 
-	priv->mc_group_entries[mc_group] = portmask;
 	if (portmask) {
-		priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+		err = priv->r->write_mcast_pmask(mc_group, portmask | priv->mc_router_portmask);
+		if (err)
+			return err;
 	} else {
-		priv->r->write_mcast_pmask(mc_group, 0);
+		err = priv->r->write_mcast_pmask(mc_group, 0);
+		if (err)
+			return err;
 		clear_bit(mc_group, priv->mc_group_bm);
+		ret = 1;
 	}
+	priv->mc_group_entries[mc_group] = portmask;
 
-	return portmask;
+	return ret;
 }
 
 static void rtl83xx_mc_group_update_mrouter(struct rtl838x_switch_priv *priv)
@@ -1577,13 +1589,16 @@ static void rtl83xx_setup_l2_mc_entry(struct rtl838x_l2_entry *e, int vid, u64 m
 static int rtl83xx_find_l2_hash_entry(struct rtl838x_switch_priv *priv, u64 seed,
 				     bool must_exist, struct rtl838x_l2_entry *e)
 {
-	int i, idx = -1;
+	int i, idx = -1, err;
 	u32 key = priv->r->l2_hash_key(priv, seed);
 
 	pr_debug("%s: using key %x, for seed %016llx\n", __func__, key, seed);
 	// Loop over all entries in the hash-bucket and over the second block on 93xx SoCs
 	for (i = 0; i < priv->l2_bucket_size; i++) {
-		priv->r->read_l2_entry_using_hash(key, i, e);
+		err = priv->r->read_l2_entry_using_hash(key, i, e);
+		if (err)
+			return err;
+
 		pr_debug("valid %d, mac %016llx\n", e->valid, ether_addr_to_u64(&e->mac[0]));
 		if (must_exist && !e->valid)
 			continue;
@@ -1605,10 +1620,13 @@ static int rtl83xx_find_l2_hash_entry(struct rtl838x_switch_priv *priv, u64 seed
 static int rtl83xx_find_l2_cam_entry(struct rtl838x_switch_priv *priv, u64 seed,
 				     bool must_exist, struct rtl838x_l2_entry *e)
 {
-	int i, idx = -1;
+	int i, idx = -1, err;
 
 	for (i = 0; i < 64; i++) {
-		priv->r->read_cam(i, e);
+		err = priv->r->read_cam(i, e);
+		if (err)
+			return err;
+
 		if (!must_exist && !e->valid) {
 			if (idx < 0) /* First empty entry? */
 				idx = i;
@@ -1643,7 +1661,7 @@ static int rtl83xx_port_fdb_add(struct dsa_switch *ds, int port,
 	// Found an existing or empty entry
 	if (idx >= 0) {
 		rtl83xx_setup_l2_uc_entry(&e, port, vid, mac);
-		priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+		err = priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
 		goto out;
 	}
 
@@ -1652,7 +1670,7 @@ static int rtl83xx_port_fdb_add(struct dsa_switch *ds, int port,
 
 	if (idx >= 0) {
 		rtl83xx_setup_l2_uc_entry(&e, port, vid, mac);
-		priv->r->write_cam(idx, &e);
+		err = priv->r->write_cam(idx, &e);
 		goto out;
 	}
 
@@ -1679,7 +1697,7 @@ static int rtl83xx_port_fdb_del(struct dsa_switch *ds, int port,
 	if (idx >= 0) {
 		pr_debug("Found entry index %d, key %d and bucket %d\n", idx, idx >> 2, idx & 3);
 		e.valid = false;
-		priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+		err = priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
 		goto out;
 	}
 
@@ -1688,7 +1706,7 @@ static int rtl83xx_port_fdb_del(struct dsa_switch *ds, int port,
 
 	if (idx >= 0) {
 		e.valid = false;
-		priv->r->write_cam(idx, &e);
+		err = priv->r->write_cam(idx, &e);
 		goto out;
 	}
 	err = -ENOENT;
@@ -1702,12 +1720,14 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 {
 	struct rtl838x_l2_entry e;
 	struct rtl838x_switch_priv *priv = ds->priv;
-	int i;
+	int i, err = 0;
 
 	mutex_lock(&priv->reg_mutex);
 
 	for (i = 0; i < priv->fib_entries; i++) {
-		priv->r->read_l2_entry_using_hash(i >> 2, i & 0x3, &e);
+		err = priv->r->read_l2_entry_using_hash(i >> 2, i & 0x3, &e);
+		if (err)
+			goto out;
 
 		if (!e.valid)
 			continue;
@@ -1720,7 +1740,9 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 	}
 
 	for (i = 0; i < 64; i++) {
-		priv->r->read_cam(i, &e);
+		err = priv->r->read_cam(i, &e);
+		if (err)
+			goto out;
 
 		if (!e.valid)
 			continue;
@@ -1729,8 +1751,9 @@ static int rtl83xx_port_fdb_dump(struct dsa_switch *ds, int port,
 			cb(e.mac, e.vid, e.is_static, data);
 	}
 
+out:
 	mutex_unlock(&priv->reg_mutex);
-	return 0;
+	return err;
 }
 
 static int rtl83xx_port_mdb_prepare(struct dsa_switch *ds, int port,
@@ -1771,17 +1794,27 @@ static void rtl83xx_port_mdb_add(struct dsa_switch *ds, int port,
 		if (e.valid) {
 			pr_debug("Found an existing entry %016llx, mc_group %d\n",
 				ether_addr_to_u64(e.mac), e.mc_portmask_index);
-			rtl83xx_mc_group_add_port(priv, e.mc_portmask_index, port);
+			err = rtl83xx_mc_group_add_port(priv, e.mc_portmask_index, port);
+			if (err)
+				goto out;
 		} else {
 			pr_debug("New entry for seed %016llx\n", seed);
+
 			mc_group = rtl83xx_mc_group_alloc(priv, port);
 			if (mc_group < 0) {
 				err = -ENOTSUPP;
 				goto out;
 			}
+
 			rtl83xx_setup_l2_mc_entry(&e, vid, mac, mc_group);
-			priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+
+			err = priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+			if (err) {
+				clear_bit(mc_group, priv->mc_group_bm);
+				goto out;
+			}
 		}
+
 		goto out;
 	}
 
@@ -1792,17 +1825,27 @@ static void rtl83xx_port_mdb_add(struct dsa_switch *ds, int port,
 		if (e.valid) {
 			pr_debug("Found existing CAM entry %016llx, mc_group %d\n",
 				 ether_addr_to_u64(e.mac), e.mc_portmask_index);
-			rtl83xx_mc_group_add_port(priv, e.mc_portmask_index, port);
+			err = rtl83xx_mc_group_add_port(priv, e.mc_portmask_index, port);
+			if (err)
+				goto out;
 		} else {
 			pr_debug("New entry\n");
+
 			mc_group = rtl83xx_mc_group_alloc(priv, port);
 			if (mc_group < 0) {
 				err = -ENOTSUPP;
 				goto out;
 			}
+
 			rtl83xx_setup_l2_mc_entry(&e, vid, mac, mc_group);
-			priv->r->write_cam(idx, &e);
+
+			err = priv->r->write_cam(idx, &e);
+			if (err) {
+				clear_bit(mc_group, priv->mc_group_bm);
+				goto out;
+			}
 		}
+
 		goto out;
 	}
 
@@ -1837,10 +1880,12 @@ int rtl83xx_port_mdb_del(struct dsa_switch *ds, int port,
 
 	if (idx >= 0) {
 		pr_debug("Found entry index %d, key %d and bucket %d\n", idx, idx >> 2, idx & 3);
-		portmask = rtl83xx_mc_group_del_port(priv, e.mc_portmask_index, port);
-		if (!portmask) {
+		err = rtl83xx_mc_group_del_port(priv, e.mc_portmask_index, port);
+		if (err < 0)
+			goto out;
+		if (err == 1) {
 			e.valid = false;
-			priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
+			err = priv->r->write_l2_entry_using_hash(idx >> 2, idx & 0x3, &e);
 		}
 		goto out;
 	}
@@ -1849,10 +1894,12 @@ int rtl83xx_port_mdb_del(struct dsa_switch *ds, int port,
 	idx = rtl83xx_find_l2_cam_entry(priv, seed, true, &e);
 
 	if (idx >= 0) {
-		portmask = rtl83xx_mc_group_del_port(priv, e.mc_portmask_index, port);
-		if (!portmask) {
+		err = rtl83xx_mc_group_del_port(priv, e.mc_portmask_index, port);
+		if (err < 0)
+			goto out;
+		if (err == 1) {
 			e.valid = false;
-			priv->r->write_cam(idx, &e);
+			err = priv->r->write_cam(idx, &e);
 		}
 		goto out;
 	}
