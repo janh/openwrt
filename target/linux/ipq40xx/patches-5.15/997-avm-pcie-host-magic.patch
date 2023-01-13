@@ -1,0 +1,128 @@
+--- a/drivers/pci/controller/dwc/pcie-qcom.c
++++ b/drivers/pci/controller/dwc/pcie-qcom.c
+@@ -102,6 +102,8 @@
+ 
+ #define QCOM_PCIE_CRC8_POLYNOMIAL (BIT(2) | BIT(1) | BIT(0))
+ 
++#define PCIE_MAGIC_SIZE		0x10000
++
+ struct qcom_pcie_resources_2_1_0 {
+ 	struct clk_bulk_data clks[QCOM_PCIE_2_1_0_MAX_CLOCKS];
+ 	struct reset_control *pci_reset;
+@@ -197,6 +199,9 @@ struct qcom_pcie {
+ 	struct phy *phy;
+ 	struct gpio_desc *reset;
+ 	const struct qcom_pcie_ops *ops;
++	void *magic_cpu_addr;
++	dma_addr_t magic_dma_handle;
++	bool host_magic;
+ };
+ 
+ #define to_qcom_pcie(x)		dev_get_drvdata((x)->dev)
+@@ -236,6 +241,79 @@ static void qcom_pcie_2_1_0_ltssm_enable
+ 	writel(val, pcie->elbi + PCIE20_ELBI_SYS_CTRL);
+ }
+ 
++static void qcom_pcie_init_magic(struct qcom_pcie *pcie)
++{
++	struct dw_pcie *pci = pcie->pci;
++	struct device *dev = pci->dev;
++	u32 *virt;
++	u32 phys;
++	int index;
++
++	if (!pcie->host_magic)
++		return;
++
++	virt = dma_alloc_coherent(dev, PCIE_MAGIC_SIZE, &phys, GFP_ATOMIC);
++	BUG_ON(virt == NULL);
++
++	pcie->magic_cpu_addr = virt;
++	pcie->magic_dma_handle = phys;
++
++	/*
++	 * Set manufacturer ID of Lantiq, to be mapped at offset 0x340 of
++	 * Lantiq MPS which has a base address of 0x1f107000
++	 */
++	virt[0x7340/4] = 0x389<<5;
++
++	/*
++	 * Program and enable address translation region to make the
++	 * manufacturer ID visible to PCIe devices
++	 */
++	index = 1;
++#if 1
++	dw_pcie_writel_dbi(pci, PCIE_ATU_VIEWPORT,
++			   PCIE_ATU_REGION_INBOUND | index);
++
++	dw_pcie_writel_dbi(pci, PCIE_ATU_CR1, PCIE_ATU_TYPE_MEM);
++	dw_pcie_writel_dbi(pci, PCIE_ATU_CR2, PCIE_ATU_ENABLE);
++
++	dw_pcie_writel_dbi(pci, PCIE_ATU_LOWER_BASE, 0x1f100000);
++	dw_pcie_writel_dbi(pci, PCIE_ATU_UPPER_BASE, 0);
++	dw_pcie_writel_dbi(pci, PCIE_ATU_LIMIT, 0x1f10ffff);
++	dw_pcie_writel_dbi(pci, PCIE_ATU_LOWER_TARGET, phys);
++	dw_pcie_writel_dbi(pci, PCIE_ATU_UPPER_TARGET, 0);
++#else
++	/* for Linux 6.0 */
++
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_REGION_CTRL1,
++			      PCIE_ATU_TYPE_MEM);
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_REGION_CTRL2,
++			      PCIE_ATU_ENABLE);
++
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_LOWER_BASE, 0x1f100000);
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_UPPER_BASE, 0);
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_LIMIT, 0x1f10ffff);
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_LOWER_TARGET, phys);
++	dw_pcie_writel_atu_ib(pci, index, PCIE_ATU_UPPER_TARGET, 0);
++#endif
++
++	/* Set vendor/device ID of GRX500 PCIe host */
++	dw_pcie_dbi_ro_wr_en(pci);
++	dw_pcie_writew_dbi(pci, PCI_VENDOR_ID, 0x1bef);
++	dw_pcie_writew_dbi(pci, PCI_DEVICE_ID, 0x0030);
++	dw_pcie_dbi_ro_wr_dis(pci);
++}
++
++static void qcom_pcie_deinit_magic(struct qcom_pcie *pcie)
++{
++	struct dw_pcie *pci = pcie->pci;
++	struct device *dev = pci->dev;
++
++	if (pcie->magic_cpu_addr)
++		dma_free_coherent(dev, PCIE_MAGIC_SIZE,
++				  pcie->magic_cpu_addr,
++				  pcie->magic_dma_handle);
++}
++
+ static int qcom_pcie_get_resources_2_1_0(struct qcom_pcie *pcie)
+ {
+ 	struct qcom_pcie_resources_2_1_0 *res = &pcie->res.v2_1_0;
+@@ -793,6 +871,8 @@ static void qcom_pcie_deinit_2_4_0(struc
+ 	reset_control_assert(res->pwr_reset);
+ 	reset_control_assert(res->ahb_reset);
+ 	clk_bulk_disable_unprepare(res->num_clks, res->clks);
++
++	qcom_pcie_deinit_magic(pcie);
+ }
+ 
+ static int qcom_pcie_init_2_4_0(struct qcom_pcie *pcie)
+@@ -946,6 +1026,8 @@ static int qcom_pcie_init_2_4_0(struct q
+ 	val |= BIT(31);
+ 	writel(val, pcie->parf + PCIE20_PARF_AXI_MSTR_WR_ADDR_HALT_V2);
+ 
++	qcom_pcie_init_magic(pcie);
++
+ 	return 0;
+ 
+ err_clks:
+@@ -1490,6 +1572,8 @@ static int qcom_pcie_probe(struct platfo
+ 
+ 	pcie->ops = of_device_get_match_data(dev);
+ 
++	pcie->host_magic = of_property_read_bool(dev->of_node, "avm,host_magic");
++
+ 	pcie->reset = devm_gpiod_get_optional(dev, "perst", GPIOD_OUT_HIGH);
+ 	if (IS_ERR(pcie->reset)) {
+ 		ret = PTR_ERR(pcie->reset);
