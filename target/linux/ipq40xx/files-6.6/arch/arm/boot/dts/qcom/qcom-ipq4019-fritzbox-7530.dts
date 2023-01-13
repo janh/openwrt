@@ -310,6 +310,8 @@
 	perst-gpio = <&tlmm 38 GPIO_ACTIVE_LOW>;
 	wake-gpio = <&tlmm 50 GPIO_ACTIVE_LOW>;
 
+	avm,host_magic;
+
 	bridge@0,0 {
 		reg = <0x00000000 0 0 0 0>;
 		#address-cells = <3>;
