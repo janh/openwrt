@@ -2016,6 +2016,9 @@ static bool rtl83xx_lag_can_offload(struct dsa_switch *ds,
 {
 	int id;
 
+	// TODO
+	return false;
+
 	id = dsa_lag_id(ds->dst, lag);
 	if (id <= 0 || id > ds->num_lag_ids)
 		return false;
@@ -2023,6 +2026,8 @@ static bool rtl83xx_lag_can_offload(struct dsa_switch *ds,
 	if (info->tx_type != NETDEV_LAG_TX_TYPE_HASH) {
 		return false;
 	}
+
+	// TODO: info->hash_type != NETDEV_LAG_HASH_L34
 	if (info->hash_type != NETDEV_LAG_HASH_L2 && info->hash_type != NETDEV_LAG_HASH_L23)
 		return false;
 
@@ -2045,6 +2050,8 @@ static int rtl83xx_port_lag_join(struct dsa_switch *ds, int port,
 {
 	struct rtl838x_switch_priv *priv = ds->priv;
 	int i, err = 0;
+
+	pr_info("TODO: rtl83xx_port_lag_join\n");
 
 	if (!rtl83xx_lag_can_offload(ds, lag, info))
 		return -EOPNOTSUPP;
