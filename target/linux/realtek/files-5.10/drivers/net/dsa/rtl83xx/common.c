@@ -1473,6 +1473,8 @@ static int __init rtl83xx_sw_probe(struct platform_device *pdev)
 	}
 	pr_debug("Chip version %c\n", priv->version);
 
+	memset(priv->lag_primary, -1, sizeof(priv->lag_primary));
+
 	err = rtl83xx_mdio_probe(priv);
 	if (err) {
 		/* Probing fails the 1st time because of missing ethernet driver
