@@ -2017,7 +2017,7 @@ static bool rtl83xx_lag_can_offload(struct dsa_switch *ds,
 	int id;
 
 	id = dsa_lag_id(ds->dst, lag);
-	if (id < 0 || id >= ds->num_lag_ids)
+	if (id <= 0 || id > ds->num_lag_ids)
 		return false;
 
 	if (info->tx_type != NETDEV_LAG_TX_TYPE_HASH) {
@@ -2051,7 +2051,7 @@ static int rtl83xx_port_lag_join(struct dsa_switch *ds, int port,
 
 	mutex_lock(&priv->reg_mutex);
 
-	for (i = 0; i < priv->n_lags; i++) {
+	for (i = 0; i < priv->ds->num_lag_ids; i++) {
 		if ((!priv->lag_devs[i]) || (priv->lag_devs[i] == lag))
 			break;
 	}
@@ -2090,7 +2090,7 @@ static int rtl83xx_port_lag_leave(struct dsa_switch *ds, int port,
 	struct rtl838x_switch_priv *priv = ds->priv;
 
 	mutex_lock(&priv->reg_mutex);
-	for (i=0;i<priv->n_lags;i++) {
+	for (i = 0; i < priv->ds->num_lag_ids; i++) {
 		if (priv->lags_port_members[i] & BIT_ULL(port)) {
 			group = i;
 			break;
