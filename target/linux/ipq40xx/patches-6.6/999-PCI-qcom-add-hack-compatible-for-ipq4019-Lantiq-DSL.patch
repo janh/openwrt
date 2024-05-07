@@ -1,0 +1,153 @@
+From 7bc223c97e1a7059afb06557d35ea4df949d4082 Mon Sep 17 00:00:00 2001
+From: Christian Marangi <ansuelsmth@gmail.com>
+Date: Tue, 7 May 2024 20:21:17 +0200
+Subject: [PATCH] PCI: qcom: add hack compatible for ipq4019 Lantiq DSL
+
+Add hack compatible for ipq4019 Lantiq DSL
+
+This change the PCIe vendor/device ID to the values from Lantiq
+GRX500 SoCs. We also program the ATU to fake the CPU ID as a Lantiq CPU
+by providing to the Lantiq firmware custom crafted value in the address
+the firmware would expect the CPU ID to be readable.
+
+Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
+---
+ drivers/pci/controller/dwc/pcie-qcom.c | 91 ++++++++++++++++++++++++++
+ 1 file changed, 91 insertions(+)
+
+diff --git a/drivers/pci/controller/dwc/pcie-qcom.c b/drivers/pci/controller/dwc/pcie-qcom.c
+index 14772edcf0d3..7cd328fefaf3 100644
+--- a/drivers/pci/controller/dwc/pcie-qcom.c
++++ b/drivers/pci/controller/dwc/pcie-qcom.c
+@@ -187,11 +187,25 @@ struct qcom_pcie_resources_2_3_3 {
+ 
+ #define QCOM_PCIE_2_4_0_MAX_CLOCKS		4
+ #define QCOM_PCIE_2_4_0_MAX_RESETS		12
++/*
++ * This value is the manufacturer ID of Lantiq. The address where
++ * it will be visible for the PCIe device matches the location of
++ * CPU ID registers on Lantiq SocS (MPS base address is 0x1f107000).
++ */
++#define QCOM_PCIE_2_4_0_CPU_ID_BASE_REG		0x1f107000
++#define QCOM_PCIE_2_4_0_CPU_ID_REG_OFFSET	0x340
++#define QCOM_PCIE_2_4_0_CPU_ID_REG		(QCOM_PCIE_2_4_0_CPU_ID_BASE_REG + \
++						  QCOM_PCIE_2_4_0_CPU_ID_REG_OFFSET)
++#define QCOM_PCIE_2_4_0_CPU_ID_REG_VAL		(0x389 << 5)
++#define QCOM_PCIE_2_4_0_GRX500_VENDOR_ID	0x1bef
++#define QCOM_PCIE_2_4_0_GRX500_DEVICE_ID	0x0030
+ struct qcom_pcie_resources_2_4_0 {
+ 	struct clk_bulk_data clks[QCOM_PCIE_2_4_0_MAX_CLOCKS];
+ 	int num_clks;
+ 	struct reset_control_bulk_data resets[QCOM_PCIE_2_4_0_MAX_RESETS];
+ 	int num_resets;
++	void *lantiq_hack_virt;
++	dma_addr_t lantiq_hack_phys;
+ };
+ 
+ #define QCOM_PCIE_2_7_0_MAX_CLOCKS		15
+@@ -653,6 +668,59 @@ static int qcom_pcie_post_init_2_3_2(struct qcom_pcie *pcie)
+ 	return 0;
+ }
+ 
++static int qcom_pcie_post_init_2_3_2_lantiq_hack(struct qcom_pcie *pcie)
++{
++	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
++	struct dw_pcie *pci = pcie->pci;
++	struct device *dev = pci->dev;
++	u64 addr, phys;
++	int index;
++	u32 *val;
++	int ret;
++
++	ret = qcom_pcie_post_init_2_3_2(pcie);
++	if (ret)
++		return ret;
++
++	res->lantiq_hack_virt = dma_alloc_coherent(dev, sizeof(u32),
++						   &res->lantiq_hack_phys,
++						   GFP_ATOMIC);
++	if (!res->lantiq_hack_virt) {
++		dev_err(dev, "failed to allocate DMA for lantiq hack\n");
++		return 0;
++	}
++
++	/* Fake Lantiq CPU ID register */
++	val = (u32 *)res->lantiq_hack_virt;
++	*val = QCOM_PCIE_2_4_0_CPU_ID_REG_VAL;
++
++	/* Use highest window index */
++	index = pci->num_ib_windows - 1;
++	if (!pci->num_ib_windows) {
++		dev_err(dev, "No inbound ATU window available for magic\n");
++		return 0;
++	}
++
++	addr = QCOM_PCIE_2_4_0_CPU_ID_REG;
++	phys = res->lantiq_hack_phys;
++
++	/* Make it visible to PCIe devices using address translation unit */
++	ret = dw_pcie_prog_inbound_atu(pci, index, PCIE_ATU_TYPE_MEM,
++				       addr, phys, sizeof(u32));
++	if (ret) {
++		dev_err(dev, "timeout waiting for IATU for lantiq hack: %d\n", ret);
++		return 0;
++	}
++
++	/* Set vendor/device ID of GRX500 PCIe host */
++	dw_pcie_dbi_ro_wr_en(pci);
++	dw_pcie_writew_dbi(pci, PCI_VENDOR_ID, QCOM_PCIE_2_4_0_GRX500_VENDOR_ID);
++	dw_pcie_writew_dbi(pci, PCI_DEVICE_ID, QCOM_PCIE_2_4_0_GRX500_DEVICE_ID);
++	dw_pcie_dbi_ro_wr_dis(pci);
++
++	return 0;
++}
++
+ static int qcom_pcie_get_resources_2_4_0(struct qcom_pcie *pcie)
+ {
+ 	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
+@@ -703,6 +769,18 @@ static void qcom_pcie_deinit_2_4_0(struct qcom_pcie *pcie)
+ 	clk_bulk_disable_unprepare(res->num_clks, res->clks);
+ }
+ 
++static void qcom_pcie_deinit_2_4_0_lantiq_hack(struct qcom_pcie *pcie)
++{
++	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
++	struct dw_pcie *pci = pcie->pci;
++	struct device *dev = pci->dev;
++
++	dma_free_coherent(dev, sizeof(u32),
++			  res->lantiq_hack_virt, res->lantiq_hack_phys);
++
++	qcom_pcie_deinit_2_4_0(pcie);
++}
++
+ static int qcom_pcie_init_2_4_0(struct qcom_pcie *pcie)
+ {
+ 	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
+@@ -1320,6 +1401,15 @@ static const struct qcom_pcie_ops ops_2_4_0 = {
+ 	.ltssm_enable = qcom_pcie_2_3_2_ltssm_enable,
+ };
+ 
++/* Qcom IP rev.: 2.4.0	Synopsys IP rev.: 4.20a Lantiq DSL Hack */
++static const struct qcom_pcie_ops ops_2_4_0_lantiq_hack = {
++	.get_resources = qcom_pcie_get_resources_2_4_0,
++	.init = qcom_pcie_init_2_4_0,
++	.post_init = qcom_pcie_post_init_2_3_2_lantiq_hack,
++	.deinit = qcom_pcie_deinit_2_4_0_lantiq_hack,
++	.ltssm_enable = qcom_pcie_2_3_2_ltssm_enable,
++};
++
+ /* Qcom IP rev.: 2.3.3	Synopsys IP rev.: 4.30a */
+ static const struct qcom_pcie_ops ops_2_3_3 = {
+ 	.get_resources = qcom_pcie_get_resources_2_3_3,
+@@ -1659,6 +1749,7 @@ static const struct of_device_id qcom_pcie_match[] = {
+ 	{ .compatible = "qcom,pcie-apq8064", .data = &cfg_2_1_0 },
+ 	{ .compatible = "qcom,pcie-apq8084", .data = &cfg_1_0_0 },
+ 	{ .compatible = "qcom,pcie-ipq4019", .data = &cfg_2_4_0 },
++	{ .compatible = "qcom,pcie-ipq4019-lantiq-hack", .data = &ops_2_4_0_lantiq_hack },
+ 	{ .compatible = "qcom,pcie-ipq6018", .data = &cfg_2_9_0 },
+ 	{ .compatible = "qcom,pcie-ipq8064", .data = &cfg_2_1_0 },
+ 	{ .compatible = "qcom,pcie-ipq8064-v2", .data = &cfg_2_1_0 },
+-- 
+2.43.0
+
