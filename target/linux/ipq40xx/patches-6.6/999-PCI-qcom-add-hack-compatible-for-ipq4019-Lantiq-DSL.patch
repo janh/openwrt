@@ -15,11 +15,9 @@ Signed-off-by: Christian Marangi <ansuelsmth@gmail.com>
  drivers/pci/controller/dwc/pcie-qcom.c | 91 ++++++++++++++++++++++++++
  1 file changed, 91 insertions(+)
 
-diff --git a/drivers/pci/controller/dwc/pcie-qcom.c b/drivers/pci/controller/dwc/pcie-qcom.c
-index 14772edcf0d3..7cd328fefaf3 100644
 --- a/drivers/pci/controller/dwc/pcie-qcom.c
 +++ b/drivers/pci/controller/dwc/pcie-qcom.c
-@@ -187,11 +187,25 @@ struct qcom_pcie_resources_2_3_3 {
+@@ -184,11 +184,25 @@ struct qcom_pcie_resources_2_3_3 {
  
  #define QCOM_PCIE_2_4_0_MAX_CLOCKS		4
  #define QCOM_PCIE_2_4_0_MAX_RESETS		12
@@ -45,7 +43,7 @@ index 14772edcf0d3..7cd328fefaf3 100644
  };
  
  #define QCOM_PCIE_2_7_0_MAX_CLOCKS		15
-@@ -653,6 +668,59 @@ static int qcom_pcie_post_init_2_3_2(struct qcom_pcie *pcie)
+@@ -628,6 +642,59 @@ static int qcom_pcie_post_init_2_3_2(str
  	return 0;
  }
  
@@ -105,7 +103,7 @@ index 14772edcf0d3..7cd328fefaf3 100644
  static int qcom_pcie_get_resources_2_4_0(struct qcom_pcie *pcie)
  {
  	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
-@@ -703,6 +769,18 @@ static void qcom_pcie_deinit_2_4_0(struct qcom_pcie *pcie)
+@@ -678,6 +745,18 @@ static void qcom_pcie_deinit_2_4_0(struc
  	clk_bulk_disable_unprepare(res->num_clks, res->clks);
  }
  
@@ -124,7 +122,7 @@ index 14772edcf0d3..7cd328fefaf3 100644
  static int qcom_pcie_init_2_4_0(struct qcom_pcie *pcie)
  {
  	struct qcom_pcie_resources_2_4_0 *res = &pcie->res.v2_4_0;
-@@ -1320,6 +1401,15 @@ static const struct qcom_pcie_ops ops_2_4_0 = {
+@@ -1265,6 +1344,15 @@ static const struct qcom_pcie_ops ops_2_
  	.ltssm_enable = qcom_pcie_2_3_2_ltssm_enable,
  };
  
@@ -140,14 +138,22 @@ index 14772edcf0d3..7cd328fefaf3 100644
  /* Qcom IP rev.: 2.3.3	Synopsys IP rev.: 4.30a */
  static const struct qcom_pcie_ops ops_2_3_3 = {
  	.get_resources = qcom_pcie_get_resources_2_3_3,
-@@ -1659,6 +1749,7 @@ static const struct of_device_id qcom_pcie_match[] = {
+@@ -1326,6 +1414,10 @@ static const struct qcom_pcie_cfg cfg_2_
+ 	.ops = &ops_2_4_0,
+ };
+ 
++static const struct qcom_pcie_cfg cfg_2_4_0_lantiq_hack = {
++	.ops = &ops_2_4_0_lantiq_hack,
++};
++
+ static const struct qcom_pcie_cfg cfg_2_7_0 = {
+ 	.ops = &ops_2_7_0,
+ };
+@@ -1613,6 +1705,7 @@ static const struct of_device_id qcom_pc
  	{ .compatible = "qcom,pcie-apq8064", .data = &cfg_2_1_0 },
  	{ .compatible = "qcom,pcie-apq8084", .data = &cfg_1_0_0 },
  	{ .compatible = "qcom,pcie-ipq4019", .data = &cfg_2_4_0 },
-+	{ .compatible = "qcom,pcie-ipq4019-lantiq-hack", .data = &ops_2_4_0_lantiq_hack },
++	{ .compatible = "qcom,pcie-ipq4019-lantiq-hack", .data = &cfg_2_4_0_lantiq_hack },
  	{ .compatible = "qcom,pcie-ipq6018", .data = &cfg_2_9_0 },
  	{ .compatible = "qcom,pcie-ipq8064", .data = &cfg_2_1_0 },
  	{ .compatible = "qcom,pcie-ipq8064-v2", .data = &cfg_2_1_0 },
--- 
-2.43.0
-
