@@ -143,6 +143,9 @@ $(eval $(call BuildPackage,rtl8821ae-firmware))
 
 Package/rtl8821ce-firmware = $(call Package/firmware-default,RealTek RTL8821CE firmware)
 define Package/rtl8821ce-firmware/install
+	$(INSTALL_DIR) $(1)/lib/firmware/rtl_bt
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/rtl_bt/rtl8821c_config.bin $(1)/lib/firmware/rtl_bt
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/rtl_bt/rtl8821c_fw.bin $(1)/lib/firmware/rtl_bt
 	$(INSTALL_DIR) $(1)/lib/firmware/rtw88
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/rtw88/rtw8821c_fw.bin $(1)/lib/firmware/rtw88
 endef
