@@ -20,6 +20,26 @@ define Device/xikestor_sks8300-8x
 endef
 TARGET_DEVICES += xikestor_sks8300-8x
 
+define Device/zyxel_xgs1010-12
+  SOC := rtl9302
+  UIMAGE_MAGIC := 0x93001010
+  DEVICE_VENDOR := Zyxel
+  DEVICE_MODEL := XGS1010-12
+  KERNEL_SIZE := 7168k
+  IMAGE_SIZE := 13184k
+  KERNEL := \
+	kernel-bin | \
+	append-dtb | \
+	lzma | \
+	uImage lzma
+  KERNEL_INITRAMFS := \
+	kernel-bin | \
+	append-dtb | \
+	lzma | \
+	uImage lzma
+endef
+TARGET_DEVICES += zyxel_xgs1010-12
+
 define Device/zyxel_xgs1250-12
   SOC := rtl9302
   UIMAGE_MAGIC := 0x93001250
