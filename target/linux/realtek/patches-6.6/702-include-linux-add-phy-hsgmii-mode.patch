@@ -34,30 +34,33 @@ Submitted-by: Birger Koblitz <git@birger-koblitz.de>
  	PHY_INTERFACE_MODE_10GBASER,
  	PHY_INTERFACE_MODE_5GBASER,
  	PHY_INTERFACE_MODE_2500BASEX,
-@@ -238,6 +239,7 @@ static int phylink_interface_max_speed(p
+@@ -230,6 +231,7 @@ static int phylink_interface_max_speed(p
+ 	case PHY_INTERFACE_MODE_GMII:
+ 		return SPEED_1000;
  
- 	case PHY_INTERFACE_MODE_XGMII:
- 	case PHY_INTERFACE_MODE_RXAUI:
 +	case PHY_INTERFACE_MODE_HSGMII:
- 	case PHY_INTERFACE_MODE_XAUI:
- 	case PHY_INTERFACE_MODE_10GBASER:
- 	case PHY_INTERFACE_MODE_10GKR:
-@@ -547,6 +549,7 @@ unsigned long phylink_get_capabilities(p
+ 	case PHY_INTERFACE_MODE_2500BASEX:
+ 		return SPEED_2500;
+ 
+@@ -538,6 +540,7 @@ unsigned long phylink_get_capabilities(p
+ 		caps |= MAC_1000FD;
  		break;
  
- 	case PHY_INTERFACE_MODE_XGMII:
 +	case PHY_INTERFACE_MODE_HSGMII:
- 	case PHY_INTERFACE_MODE_RXAUI:
- 	case PHY_INTERFACE_MODE_XAUI:
- 	case PHY_INTERFACE_MODE_10GBASER:
-@@ -957,6 +960,7 @@ static int phylink_parse_mode(struct phy
- 			fallthrough;
- 		case PHY_INTERFACE_MODE_USXGMII:
- 		case PHY_INTERFACE_MODE_10GKR:
+ 	case PHY_INTERFACE_MODE_2500BASEX:
+ 		caps |= MAC_2500FD;
+ 		break;
+@@ -942,6 +945,10 @@ static int phylink_parse_mode(struct phy
+ 			phylink_set(pl->supported, 1000baseX_Full);
+ 			break;
+ 
 +		case PHY_INTERFACE_MODE_HSGMII:
- 		case PHY_INTERFACE_MODE_10GBASER:
- 			phylink_set(pl->supported, 10baseT_Half);
- 			phylink_set(pl->supported, 10baseT_Full);
++			phylink_set(pl->supported, 2500baseT_Full);
++			break;
++
+ 		case PHY_INTERFACE_MODE_2500BASEX:
+ 			phylink_set(pl->supported, 2500baseX_Full);
+ 			break;
 --- a/include/linux/phy.h
 +++ b/include/linux/phy.h
 @@ -148,6 +148,7 @@ typedef enum {
