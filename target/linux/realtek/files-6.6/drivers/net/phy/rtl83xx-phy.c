@@ -694,9 +694,11 @@ static int rtl8226_set_eee(struct phy_device *phydev, struct ethtool_eee *e)
 	phy_write_mmd(phydev, MDIO_MMD_AN, MDIO_AN_EEE_ADV2, val);
 
 	/* RestartAutoNegotiation */
-	val = phy_read_mmd(phydev, MDIO_MMD_VEND2, 0xA400);
-	val |= MDIO_AN_CTRL1_RESTART;
-	phy_write_mmd(phydev, MDIO_MMD_VEND2, 0xA400, val);
+	if (an_enabled) {
+		val = phy_read_mmd(phydev, MDIO_MMD_VEND2, 0xA400);
+		val |= MDIO_AN_CTRL1_RESTART;
+		phy_write_mmd(phydev, MDIO_MMD_VEND2, 0xA400, val);
+	}
 
 	resume_polling(poll_state);
 
