@@ -413,6 +413,7 @@ static int rtl93xx_pcs_validate(struct phylink_pcs *pcs,
 	    state->interface != PHY_INTERFACE_MODE_QSGMII &&
 	    state->interface != PHY_INTERFACE_MODE_XGMII &&
 	    state->interface != PHY_INTERFACE_MODE_HSGMII &&
+	    state->interface != PHY_INTERFACE_MODE_2500BASEX &&
 	    state->interface != PHY_INTERFACE_MODE_10GBASER &&
 	    state->interface != PHY_INTERFACE_MODE_10GKR &&
 	    state->interface != PHY_INTERFACE_MODE_USXGMII &&
@@ -467,6 +468,10 @@ static int rtl93xx_pcs_validate(struct phylink_pcs *pcs,
 
 	if (state->interface == PHY_INTERFACE_MODE_HSGMII) {
 		phylink_set(mask, 2500baseT_Full);
+	}
+
+	if (state->interface == PHY_INTERFACE_MODE_2500BASEX) {
+		phylink_set(mask, 2500baseX_Full);
 	}
 
 	phylink_set(mask, 10baseT_Half);
@@ -691,6 +696,7 @@ static void rtl83xx_phylink_get_caps(struct dsa_switch *ds, int port,
 	__set_bit(PHY_INTERFACE_MODE_XGMII, config->supported_interfaces);
 	__set_bit(PHY_INTERFACE_MODE_USXGMII, config->supported_interfaces);
 	__set_bit(PHY_INTERFACE_MODE_1000BASEX, config->supported_interfaces);
+	__set_bit(PHY_INTERFACE_MODE_2500BASEX, config->supported_interfaces);
 	__set_bit(PHY_INTERFACE_MODE_10GBASER, config->supported_interfaces);
 }
 
