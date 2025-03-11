@@ -660,6 +660,7 @@ static int rtl93xx_pcs_validate(struct phylink_pcs *pcs,
 		phylink_set(mask, 10000baseKR_Full);
 		phylink_set(mask, 10000baseSR_Full);
 		phylink_set(mask, 10000baseCR_Full);
+		phylink_set(mask, 10000baseLR_Full);
 	}
 	if (state->interface == PHY_INTERFACE_MODE_INTERNAL) {
 		phylink_set(mask, 1000baseX_Full);
@@ -668,6 +669,7 @@ static int rtl93xx_pcs_validate(struct phylink_pcs *pcs,
 		phylink_set(mask, 10000baseT_Full);
 		phylink_set(mask, 10000baseSR_Full);
 		phylink_set(mask, 10000baseCR_Full);
+		phylink_set(mask, 10000baseLR_Full);
 	}
 
 	if (state->interface == PHY_INTERFACE_MODE_USXGMII) {
