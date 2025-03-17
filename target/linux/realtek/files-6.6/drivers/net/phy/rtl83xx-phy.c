@@ -1731,75 +1731,11 @@ void rtl930x_sds_rx_rst(int sds_num, phy_interface_t phy_if)
 	rtl9300_sds_field_w(sds_num, page, 0x15, 4, 4, 0x0);
 }
 
-/* Force PHY modes on 10GBit Serdes
- */
-void rtl9300_force_sds_mode(int sds, phy_interface_t phy_if)
+void rtl930x_sds_lc_config(int sds, bool lc_on, int lc_value)
 {
-	int lc_value;
-	int sds_mode;
-	bool lc_on;
 	int lane_0 = (sds % 2) ? sds - 1 : sds;
 	u32 v;
 
-	pr_info("%s: SDS: %d, mode %d\n", __func__, sds, phy_if);
-	switch (phy_if) {
-	case PHY_INTERFACE_MODE_SGMII:
-		sds_mode = RTL930X_SDS_MODE_SGMII;
-		lc_on = false;
-		lc_value = 0x1;
-		break;
-
-	case PHY_INTERFACE_MODE_HSGMII:
-		sds_mode = RTL930X_SDS_MODE_HSGMII;
-		lc_value = 0x3;
-		/* Configure LC */
-		break;
-
-	case PHY_INTERFACE_MODE_1000BASEX:
-		sds_mode = RTL930X_SDS_MODE_1000BASEX;
-		lc_on = false;
-		break;
-
-	case PHY_INTERFACE_MODE_2500BASEX:
-		sds_mode = RTL930X_SDS_MODE_2500BASEX;
-		lc_value = 0x3;
-		/* Configure LC */
-		break;
-
-	case PHY_INTERFACE_MODE_10GBASER:
-		sds_mode = RTL930X_SDS_MODE_10GBASER;
-		lc_on = true;
-		lc_value = 0x5;
-		break;
-
-	case PHY_INTERFACE_MODE_NA:
-		/* This will disable SerDes */
-		sds_mode = RTL930X_SDS_OFF;
-		break;
-
-	default:
-		pr_err("%s: unknown serdes mode: %s\n",
-		       __func__, phy_modes(phy_if));
-		return;
-	}
-
-	pr_info("%s --------------------- serdes %d forcing to %x ...\n", __func__, sds, sds_mode);
-	/* Power down SerDes */
-	rtl9300_sds_field_w(sds, 0x20, 0, 7, 6, 0x3);
-	if (sds == 5) pr_info("%s after %x\n", __func__, rtl930x_read_sds_phy(sds, 0x20, 0));
-
-	if (sds == 5) pr_info("%s a %x\n", __func__, rtl930x_read_sds_phy(sds, 0x1f, 9));
-	/* Force mode enable */
-	rtl9300_sds_field_w(sds, 0x1f, 9, 6, 6, 0x1);
-	if (sds == 5) pr_info("%s b %x\n", __func__, rtl930x_read_sds_phy(sds, 0x1f, 9));
-
-	/* SerDes off */
-	rtl9300_sds_field_w(sds, 0x1f, 9, 11, 7, RTL930X_SDS_OFF);
-
-	if (phy_if == PHY_INTERFACE_MODE_NA)
-		return;
-
-	if (sds == 5) pr_info("%s c %x\n", __func__, rtl930x_read_sds_phy(sds, 0x20, 18));
 	/* Enable LC and ring */
 	rtl9300_sds_field_w(lane_0, 0x20, 18, 3, 0, 0xf);
 
@@ -1824,6 +1760,126 @@ void rtl9300_force_sds_mode(int sds, phy_interface_t phy_if)
 		rtl9300_sds_field_w(lane_0, 0x20, 18, 5, 4, v);
 	else
 		rtl9300_sds_field_w(lane_0, 0x20, 18, 7, 6, v);
+}
+
+/* Force PHY modes on 10GBit Serdes
+ */
+void rtl9300_force_sds_mode(int sds, phy_interface_t phy_if)
+{
+	int lc_value;
+	int sds_mode;
+	bool lc_on;
+	bool lc_on_auto;
+	int lane_0 = (sds % 2) ? sds - 1 : sds;
+	int other_lane_sds = (sds % 2) ? sds -1 : sds + 1;
+	int other_lane_lc_value;
+	bool other_lane_lc_on;
+
+	/* TODO: It is not quite clear which modes require a specific lc_on value, and
+	 * which ones support both. There are different variants in vendor firmware for
+	 * different devices.
+	 *
+	 * The current implementation (dynamic lc_on for 1G modes) works on XGS1010-12,
+	 * which is similar to the vendor firmware works. On this device, the 2.5G modes
+	 * only work with lc_on=false, even though the vendor firmware for the very
+	 * similar XGS1210-12 uses lc_on=true for HSGMII.
+	 *
+	 * So there might be different hardware revisions requiring a different choice.
+	 * It might also be dependent on previous configuration (for example by the
+	 * bootloader).
+	 */
+
+	pr_info("%s: SDS: %d, mode %d\n", __func__, sds, phy_if);
+	switch (phy_if) {
+	case PHY_INTERFACE_MODE_SGMII:
+		sds_mode = RTL930X_SDS_MODE_SGMII;
+		lc_on_auto = true;
+		lc_value = 0x1;
+		break;
+
+	case PHY_INTERFACE_MODE_HSGMII:
+		sds_mode = RTL930X_SDS_MODE_HSGMII;
+		lc_on_auto = false;
+		lc_on = false;
+		lc_value = 0x3;
+		break;
+
+	case PHY_INTERFACE_MODE_1000BASEX:
+		sds_mode = RTL930X_SDS_MODE_1000BASEX;
+		lc_on_auto = true;
+		lc_value = 0x1;
+		break;
+
+	case PHY_INTERFACE_MODE_2500BASEX:
+		sds_mode = RTL930X_SDS_MODE_2500BASEX;
+		lc_on_auto = false;
+		lc_on = false;
+		lc_value = 0x3;
+		break;
+
+	case PHY_INTERFACE_MODE_10GBASER:
+		sds_mode = RTL930X_SDS_MODE_10GBASER;
+		lc_on_auto = false;
+		lc_on = true;
+		lc_value = 0x5;
+		break;
+
+	case PHY_INTERFACE_MODE_NA:
+		/* This will disable SerDes */
+		sds_mode = RTL930X_SDS_OFF;
+		break;
+
+	default:
+		pr_err("%s: unknown serdes mode: %s\n",
+		       __func__, phy_modes(phy_if));
+		return;
+	}
+
+	pr_info("%s --------------------- serdes %d forcing to %x ...\n", __func__, sds, sds_mode);
+	/* Power down SerDes */
+	rtl9300_sds_field_w(sds, 0x20, 0, 7, 6, 0x3);
+
+	/* Force mode enable */
+	rtl9300_sds_field_w(sds, 0x1f, 9, 6, 6, 0x1);
+
+	/* SerDes off */
+	rtl9300_sds_field_w(sds, 0x1f, 9, 11, 7, RTL930X_SDS_OFF);
+
+	if (phy_if == PHY_INTERFACE_MODE_NA)
+		return;
+
+	/* Read LC state of other lane */
+	if (lane_0 == other_lane_sds)
+		other_lane_lc_on = (rtl9300_sds_field_r(lane_0, 0x20, 18, 5, 4) == 0x3);
+	else
+		other_lane_lc_on = (rtl9300_sds_field_r(lane_0, 0x20, 18, 7, 6) == 0x3);
+
+	if (other_lane_lc_on)
+		other_lane_lc_value = rtl9300_sds_field_r(lane_0, 0x20, 18, 11, 8);
+	else
+		other_lane_lc_value = rtl9300_sds_field_r(lane_0, 0x20, 18, 15, 12);
+
+	if (lc_on_auto) {
+		/* Determine lc_on value: match other lane if it runs at same speed */
+		if (other_lane_lc_value == lc_value)
+			lc_on = other_lane_lc_on;
+		else
+			lc_on = !other_lane_lc_on;
+	} else if (other_lane_lc_value != lc_value && other_lane_lc_on == lc_on) {
+		/* Other lane needs reconfiguration. Note: This assumes that the lc_value
+		 * of the other lane also supports a toggled lc_on. With the current set
+		 * of supported modes, this should always be the case.
+		 */
+		pr_debug("%s: LC reconfiguration of other lane: sds %d: lc_on=%d, lc_value=%d\n",
+			__func__, other_lane_sds, !lc_on, other_lane_lc_value);
+
+		rtl930x_sds_lc_config(other_lane_sds, !lc_on, other_lane_lc_value);
+	}
+
+	pr_debug("%s: LC configuration: sds %d: lc_on=%d, lc_value=%d\n",
+		__func__, sds, lc_on, lc_value);
+
+	rtl930x_sds_lc_config(sds, lc_on, lc_value);
 
 	/* Force SerDes mode */
 	rtl9300_sds_field_w(sds, 0x1f, 9, 6, 6, 1);
@@ -1833,6 +1889,7 @@ void rtl9300_force_sds_mode(int sds, phy_interface_t phy_if)
 	for (int i = 0; i < 20; i++) {
 		u32 cr_0, cr_1, cr_2;
 		u32 m_bit, l_bit;
+		u32 v;
 
 		mdelay(200);
 
