@@ -179,6 +179,7 @@ void rtl930x_vlan_profile_dump(int index);
 int rtl9300_sds_power(int mac, int val);
 void rtl9300_sds_rst(int sds_num, u32 mode);
 int rtl9300_serdes_setup(int port, int sds_num, phy_interface_t phy_mode);
+void rtl9300_sds_set_autoneg(int sds_num, bool autoneg);
 void rtl930x_print_matrix(void);
 
 /* RTL931x-specific */

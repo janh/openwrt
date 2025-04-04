@@ -839,6 +839,22 @@ static int rtl83xx_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	return 0;
 }
 
+static int rtl93xx_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
+			      phy_interface_t interface,
+			      const unsigned long *advertising,
+			      bool permit_pause_to_mac)
+{
+	struct rtl838x_pcs *rtpcs = container_of(pcs, struct rtl838x_pcs, pcs);
+	struct rtl838x_switch_priv *priv = rtpcs->priv;
+	int port = rtpcs->port;
+	int sds_num = priv->ports[port].sds_num;
+
+	if (priv->family_id == RTL9300_FAMILY_ID)
+		rtl9300_sds_set_autoneg(sds_num, neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED);
+
+	return 0;
+}
+
 static void rtl83xx_pcs_an_restart(struct phylink_pcs *pcs)
 {
 /* No restart functionality existed before we migrated to pcs */
@@ -2704,7 +2720,7 @@ const struct phylink_pcs_ops rtl93xx_pcs_ops = {
 	.pcs_an_restart		= rtl83xx_pcs_an_restart,
 	.pcs_validate		= rtl93xx_pcs_validate,
 	.pcs_get_state		= rtl93xx_pcs_get_state,
-	.pcs_config		= rtl83xx_pcs_config,
+	.pcs_config		= rtl93xx_pcs_config,
 };
 
 const struct dsa_switch_ops rtl930x_switch_ops = {

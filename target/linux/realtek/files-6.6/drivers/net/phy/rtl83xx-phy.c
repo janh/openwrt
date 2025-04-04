@@ -2861,6 +2861,20 @@ void rtl9300_phy_enable_10g_1g(int sds_num)
 static int rtl9300_sds_10g_idle(int sds_num);
 static void rtl9300_serdes_patch(int sds_num);
 
+void rtl9300_sds_set_autoneg(int sds_num, bool autoneg)
+{
+	u32 v;
+
+	v = rtl930x_read_sds_phy(sds_num, PHY_PAGE_2, MII_BMCR);
+
+	if (autoneg)
+		v |= BMCR_ANENABLE;
+	else
+		v &= ~BMCR_ANENABLE;
+
+	rtl930x_write_sds_phy(sds_num, PHY_PAGE_2, MII_BMCR, v);
+}
+
 #define RTL930X_MAC_FORCE_MODE_CTRL		(0xCA1C)
 int rtl9300_serdes_setup(int port, int sds_num, phy_interface_t phy_mode)
 {
