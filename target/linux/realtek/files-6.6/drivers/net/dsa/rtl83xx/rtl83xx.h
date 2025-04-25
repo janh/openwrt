@@ -41,6 +41,50 @@ struct rtl83xx_mib_list_item {
 };
 
 struct rtl83xx_mib_desc {
+	struct rtl83xx_mib_item symbol_errors;
+
+	struct rtl83xx_mib_item if_in_octets;
+	struct rtl83xx_mib_item if_out_octets;
+	struct rtl83xx_mib_item if_in_ucast_pkts;
+	struct rtl83xx_mib_item if_in_mcast_pkts;
+	struct rtl83xx_mib_item if_in_bcast_pkts;
+	struct rtl83xx_mib_item if_out_ucast_pkts;
+	struct rtl83xx_mib_item if_out_mcast_pkts;
+	struct rtl83xx_mib_item if_out_bcast_pkts;
+	struct rtl83xx_mib_item port_in_discards;
+	struct rtl83xx_mib_item if_out_discards;
+	struct rtl83xx_mib_item single_collisions;
+	struct rtl83xx_mib_item multiple_collisions;
+	struct rtl83xx_mib_item deferred_transmissions;
+	struct rtl83xx_mib_item late_collisions;
+	struct rtl83xx_mib_item excessive_collisions;
+	struct rtl83xx_mib_item crc_align_errors;
+
+	struct rtl83xx_mib_item unsupported_opcodes;
+
+	struct rtl83xx_mib_item rx_undersize_pkts;
+	struct rtl83xx_mib_item rx_oversize_pkts;
+	struct rtl83xx_mib_item rx_fragments;
+	struct rtl83xx_mib_item rx_jabbers;
+
+	struct rtl83xx_mib_item tx_pkts_64_octets;
+	struct rtl83xx_mib_item rx_pkts_64_octets;
+	struct rtl83xx_mib_item tx_pkts_65_to_127_octets;
+	struct rtl83xx_mib_item rx_pkts_65_to_127_octets;
+	struct rtl83xx_mib_item tx_pkts_128_to_255_octets;
+	struct rtl83xx_mib_item rx_pkts_128_to_255_octets;
+	struct rtl83xx_mib_item tx_pkts_256_to_511_octets;
+	struct rtl83xx_mib_item rx_pkts_256_to_511_octets;
+	struct rtl83xx_mib_item tx_pkts_512_to_1023_octets;
+	struct rtl83xx_mib_item rx_pkts_512_to_1023_octets;
+	struct rtl83xx_mib_item tx_pkts_1024_to_1518_octets;
+	struct rtl83xx_mib_item rx_pkts_1024_to_1518_octets;
+	struct rtl83xx_mib_item tx_pkts_1519_to_max_octets;
+	struct rtl83xx_mib_item rx_pkts_1519_to_max_octets;
+
+	struct rtl83xx_mib_item rx_pause_frames;
+	struct rtl83xx_mib_item tx_pause_frames;
+
 	size_t list_count;
 	const struct rtl83xx_mib_list_item *list;
 };
