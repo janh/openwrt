@@ -51,6 +51,7 @@ struct rtl83xx_mib_desc {
 	struct rtl83xx_mib_item if_out_ucast_pkts;
 	struct rtl83xx_mib_item if_out_mcast_pkts;
 	struct rtl83xx_mib_item if_out_bcast_pkts;
+	struct rtl83xx_mib_item if_out_discards;
 	struct rtl83xx_mib_item single_collisions;
 	struct rtl83xx_mib_item multiple_collisions;
 	struct rtl83xx_mib_item deferred_transmissions;
@@ -68,6 +69,9 @@ struct rtl83xx_mib_desc {
 	struct rtl83xx_mib_item tx_pkts[ETHTOOL_RMON_HIST_MAX];
 	struct rtl83xx_mib_item rx_pkts[ETHTOOL_RMON_HIST_MAX];
 	struct ethtool_rmon_hist_range rmon_ranges[ETHTOOL_RMON_HIST_MAX];
+
+	struct rtl83xx_mib_item drop_events;
+	struct rtl83xx_mib_item collisions;
 
 	struct rtl83xx_mib_item rx_pause_frames;
 	struct rtl83xx_mib_item tx_pause_frames;
