@@ -82,6 +82,9 @@ struct rtl83xx_mib_desc {
 	struct rtl83xx_mib_item tx_pkts_1519_to_max_octets;
 	struct rtl83xx_mib_item rx_pkts_1519_to_max_octets;
 
+	struct rtl83xx_mib_item drop_events;
+	struct rtl83xx_mib_item collisions;
+
 	struct rtl83xx_mib_item rx_pause_frames;
 	struct rtl83xx_mib_item tx_pause_frames;
 
