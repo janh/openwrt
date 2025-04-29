@@ -639,6 +639,51 @@ enum pbvlan_mode {
 	PBVLAN_MODE_ALL_PKT,
 };
 
+struct rtl83xx_counter {
+	uint64_t val;
+	uint32_t last;
+};
+
+struct rtl83xx_counter_state {
+	spinlock_t lock;
+	ktime_t last_update;
+
+	struct rtl83xx_counter symbol_errors;
+
+	struct rtl83xx_counter if_in_octets;
+	struct rtl83xx_counter if_out_octets;
+	struct rtl83xx_counter if_in_ucast_pkts;
+	struct rtl83xx_counter if_in_mcast_pkts;
+	struct rtl83xx_counter if_in_bcast_pkts;
+	struct rtl83xx_counter if_out_ucast_pkts;
+	struct rtl83xx_counter if_out_mcast_pkts;
+	struct rtl83xx_counter if_out_bcast_pkts;
+	struct rtl83xx_counter if_out_discards;
+	struct rtl83xx_counter single_collisions;
+	struct rtl83xx_counter multiple_collisions;
+	struct rtl83xx_counter deferred_transmissions;
+	struct rtl83xx_counter late_collisions;
+	struct rtl83xx_counter excessive_collisions;
+	struct rtl83xx_counter crc_align_errors;
+	struct rtl83xx_counter rx_pkts_over_max_octets;
+
+	struct rtl83xx_counter unsupported_opcodes;
+
+	struct rtl83xx_counter rx_undersize_pkts;
+	struct rtl83xx_counter rx_oversize_pkts;
+	struct rtl83xx_counter rx_fragments;
+	struct rtl83xx_counter rx_jabbers;
+
+	struct rtl83xx_counter tx_pkts[ETHTOOL_RMON_HIST_MAX];
+	struct rtl83xx_counter rx_pkts[ETHTOOL_RMON_HIST_MAX];
+
+	struct rtl83xx_counter drop_events;
+	struct rtl83xx_counter collisions;
+
+	struct rtl83xx_counter rx_pause_frames;
+	struct rtl83xx_counter tx_pause_frames;
+};
+
 struct rtl838x_port {
 	bool enable;
 	u64 pm;
@@ -651,6 +696,7 @@ struct rtl838x_port {
 	int sds_num;
 	int led_set;
 	int leds_on_this_port;
+	struct rtl83xx_counter_state counters;
 	const struct dsa_port *dp;
 };
 
@@ -1116,6 +1162,7 @@ struct rtl838x_switch_priv {
 	struct rtl838x_l3_intf *interfaces[MAX_INTERFACES];
 	u16 intf_mtus[MAX_INTF_MTUS];
 	int intf_mtu_count[MAX_INTF_MTUS];
+	struct delayed_work counters_work;
 };
 
 void rtl838x_dbgfs_init(struct rtl838x_switch_priv *priv);

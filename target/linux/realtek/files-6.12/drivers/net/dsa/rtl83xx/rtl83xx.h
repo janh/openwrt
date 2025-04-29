@@ -58,6 +58,7 @@ struct rtl83xx_mib_desc {
 	struct rtl83xx_mib_item late_collisions;
 	struct rtl83xx_mib_item excessive_collisions;
 	struct rtl83xx_mib_item crc_align_errors;
+	struct rtl83xx_mib_item rx_pkts_over_max_octets;
 
 	struct rtl83xx_mib_item unsupported_opcodes;
 
