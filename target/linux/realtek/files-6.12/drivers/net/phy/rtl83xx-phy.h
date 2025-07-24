@@ -75,6 +75,8 @@ int rtl9300_serdes_setup(int port, int sds_num, phy_interface_t phy_mode);
 int rtl930x_read_sds_phy(int phy_addr, int page, int phy_reg);
 int rtl930x_write_sds_phy(int phy_addr, int page, int phy_reg, u16 v);
 
+void rtsds_930x_set_autoneg(int sds_num, bool autoneg);
+
 int rtl931x_read_sds_phy(int phy_addr, int page, int phy_reg);
 int rtl931x_write_sds_phy(int phy_addr, int page, int phy_reg, u16 v);
 int rtl931x_sds_cmu_band_get(int sds, phy_interface_t mode);
