@@ -189,9 +189,9 @@ static void rtpcs_pcs_an_restart(struct phylink_pcs *pcs)
 		 link->port, link->sds);
 }
 
-static int rtpcs_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
-			    phy_interface_t interface, const unsigned long *advertising,
-			    bool permit_pause_to_mac)
+static int rtpcs_83xx_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
+				 phy_interface_t interface, const unsigned long *advertising,
+				 bool permit_pause_to_mac)
 {
 	struct rtpcs_link *link = rtpcs_phylink_pcs_to_link(pcs);
 	struct rtpcs_ctrl *ctrl = link->ctrl;
@@ -204,6 +204,37 @@ static int rtpcs_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 
 	dev_warn(ctrl->dev, "pcs_config(%s) for port %d and sds %d not yet implemented\n",
 		 phy_modes(interface), link->port, link->sds);
+
+	return 0;
+}
+
+static int rtpcs_93xx_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
+				 phy_interface_t interface, const unsigned long *advertising,
+				 bool permit_pause_to_mac)
+{
+	struct rtpcs_link *link = rtpcs_phylink_pcs_to_link(pcs);
+	struct rtpcs_ctrl *ctrl = link->ctrl;
+	int bmcr_regnum, ret;
+	u16 bmcr_val;
+
+	/*
+	 * TODO: This (or copies of this) will be the central function for configuring the
+	 * link between PHY and SerDes. As of now a lot of the code is scattered throughout
+	 * all the other Realtek drivers. Maybe some day this will live up to the expectations.
+	 */
+
+	dev_warn(ctrl->dev, "pcs_config(%s) for port %d and sds %d not yet properly implemented\n",
+		 phy_modes(interface), link->port, link->sds);
+
+	if (link->sds >= 0) {
+		bmcr_regnum = rtpcs_sds_to_mmd(2, MII_BMCR);
+		bmcr_val = neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED ? BMCR_ANENABLE : 0;
+
+		ret = mdiobus_c45_modify(ctrl->bus, link->sds, MDIO_MMD_VEND1, bmcr_regnum,
+					 BMCR_ANENABLE, bmcr_val);
+		if (ret < 0)
+			return ret;
+	}
 
 	return 0;
 }
@@ -339,7 +370,7 @@ static int rtpcs_probe(struct platform_device *pdev)
 
 static const struct phylink_pcs_ops rtpcs_838x_pcs_ops = {
 	.pcs_an_restart		= rtpcs_pcs_an_restart,
-	.pcs_config		= rtpcs_pcs_config,
+	.pcs_config		= rtpcs_83xx_pcs_config,
 	.pcs_get_state		= rtpcs_pcs_get_state,
 };
 
@@ -356,7 +387,7 @@ static const struct rtpcs_config rtpcs_838x_cfg = {
 
 static const struct phylink_pcs_ops rtpcs_839x_pcs_ops = {
 	.pcs_an_restart		= rtpcs_pcs_an_restart,
-	.pcs_config		= rtpcs_pcs_config,
+	.pcs_config		= rtpcs_83xx_pcs_config,
 	.pcs_get_state		= rtpcs_pcs_get_state,
 };
 
@@ -373,7 +404,7 @@ static const struct rtpcs_config rtpcs_839x_cfg = {
 
 static const struct phylink_pcs_ops rtpcs_930x_pcs_ops = {
 	.pcs_an_restart		= rtpcs_pcs_an_restart,
-	.pcs_config		= rtpcs_pcs_config,
+	.pcs_config		= rtpcs_93xx_pcs_config,
 	.pcs_get_state		= rtpcs_pcs_get_state,
 };
 
@@ -390,7 +421,7 @@ static const struct rtpcs_config rtpcs_930x_cfg = {
 
 static const struct phylink_pcs_ops rtpcs_931x_pcs_ops = {
 	.pcs_an_restart		= rtpcs_pcs_an_restart,
-	.pcs_config		= rtpcs_pcs_config,
+	.pcs_config		= rtpcs_93xx_pcs_config,
 	.pcs_get_state		= rtpcs_pcs_get_state,
 };
 
