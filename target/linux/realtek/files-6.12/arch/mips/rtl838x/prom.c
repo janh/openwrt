@@ -176,15 +176,49 @@ static void __init parse_soc_name(uint32_t model)
 	soc_info.name = soc_name;
 }
 
+static void __init read_soc_revision(uint32_t model)
+{
+	uint32_t val;
+
+	switch (soc_info.family) {
+	case RTL8380_FAMILY_ID:
+		sw_w32(0x3, RTL838X_INT_RW_CTRL);
+		sw_w32(0xa << 28, RTL838X_CHIP_INFO);
+		val = sw_r32(RTL838X_CHIP_INFO);
+		soc_info.revision = (val >> 16) & 0x1f;
+		break;
+
+	case RTL8390_FAMILY_ID:
+		sw_w32(0xa << 28, RTL839X_CHIP_INFO);
+		val = sw_r32(RTL839X_CHIP_INFO);
+		soc_info.revision = (val >> 16) & 0x1f;
+		break;
+
+	case RTL9300_FAMILY_ID:
+	case RTL9310_FAMILY_ID:
+		soc_info.revision = model & 0xf;
+		break;
+
+	default:
+		soc_info.revision = 0;
+	}
+}
+
 static void __init rtl83xx_set_system_type(void) {
+	char revision = '?';
+
+	if (soc_info.revision > 0 && soc_info.revision <= 24)
+		revision = 'A' + (soc_info.revision - 1);
+
 	snprintf(rtl83xx_system_type, sizeof(rtl83xx_system_type),
-		 "Realtek %s", soc_info.name);
+		 "Realtek %s rev %c", soc_info.name, revision);
 }
 
 void __init prom_init(void)
 {
 	uint32_t model = read_soc_model();
 	parse_soc_name(model);
+	read_soc_revision(model);
 	rtl83xx_set_system_type();
 
 	pr_info("SoC Type: %s\n", get_system_type());

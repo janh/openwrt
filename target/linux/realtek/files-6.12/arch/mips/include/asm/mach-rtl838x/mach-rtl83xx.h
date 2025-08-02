@@ -222,7 +222,9 @@
 #define RTL930X_GPIO_PCD_IMR            (RTL930X_GPIO_CTRL_REG_BASE + 0x18)
 
 #define RTL838X_MODEL_NAME_INFO		(0x00D4)
+#define RTL838X_CHIP_INFO		(0x00D8)
 #define RTL839X_MODEL_NAME_INFO		(0x0FF0)
+#define RTL839X_CHIP_INFO		(0x0FF4)
 #define RTL93XX_MODEL_NAME_INFO		(0x0004)
 #define RTL931X_CHIP_INFO_ADDR		(0x0008)
 
@@ -391,6 +393,7 @@ struct rtl83xx_soc_info {
 	unsigned char *name;
 	unsigned int id;
 	unsigned int family;
+	unsigned int revision;
 	unsigned char *compatible;
 	volatile void *sw_base;
 	volatile void *icu_base;
