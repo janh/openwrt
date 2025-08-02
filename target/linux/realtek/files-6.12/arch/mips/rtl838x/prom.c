@@ -166,6 +166,11 @@ static void __init parse_model_name(uint32_t model)
 	if (num_chars == 2 && (model & 0x30)) {
 		suffix[pos] = 'E';
 		suffix[pos+1] = 'S';
+		pos += 2;
+	}
+
+	if (pos >= 2 && suffix[pos-2] == 'E' && suffix[pos-1] == 'S') {
+		soc_info.testchip = true;
 	}
 
 	snprintf(soc_name, sizeof(soc_name), "RTL%04X%s",
@@ -174,15 +179,50 @@ static void __init parse_model_name(uint32_t model)
 	soc_info.name = soc_name;
 }
 
+static void __init read_chip_info(void)
+{
+	uint32_t val = 0;
+
+	switch (soc_info.family) {
+	case RTL8380_FAMILY_ID:
+		sw_w32(0x3, RTL838X_INT_RW_CTRL);
+		sw_w32(0xa << 28, RTL838X_CHIP_INFO);
+		val = sw_r32(RTL838X_CHIP_INFO);
+		soc_info.revision = (val >> 16) & 0x1f;
+		break;
+
+	case RTL8390_FAMILY_ID:
+		sw_w32(0xa << 28, RTL839X_CHIP_INFO);
+		val = sw_r32(RTL839X_CHIP_INFO);
+		soc_info.revision = (val >> 16) & 0x1f;
+		break;
+
+	case RTL9300_FAMILY_ID:
+	case RTL9310_FAMILY_ID:
+		sw_w32(0xa << 16, RTL93XX_CHIP_INFO);
+		val = sw_r32(RTL93XX_CHIP_INFO);
+		soc_info.revision = (val >> 28) & 0xf;
+		break;
+	}
+
+	soc_info.cpu = val & 0xffff;
+}
+
 static void __init rtl83xx_set_system_type(void) {
+	char revision = '?';
+
+	if (soc_info.revision > 0 && soc_info.revision <= 24)
+		revision = 'A' + (soc_info.revision - 1);
+
 	snprintf(rtl83xx_system_type, sizeof(rtl83xx_system_type),
-		 "Realtek %s", soc_info.name);
+		 "Realtek %s rev %c (%04X)", soc_info.name, revision, soc_info.cpu);
 }
 
 void __init prom_init(void)
 {
 	uint32_t model = read_model_name();
 	parse_model_name(model);
+	read_chip_info();
 	rtl83xx_set_system_type();
 
 	pr_info("SoC Type: %s\n", get_system_type());
