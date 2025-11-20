@@ -406,6 +406,13 @@ define Device/asus_tuf-ax4200
   KERNEL_INITRAMFS := kernel-bin | lzma | \
 	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 64k
   IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+ifeq ($(IB),)
+ifeq ($(CONFIG_TARGET_ROOTFS_INITRAMFS_SEPARATE),)
+  ARTIFACTS := initramfs.trx
+  ARTIFACT/initramfs.trx := append-image-stage initramfs-kernel.bin | \
+	uImage none | asus-trx -v 3 -n $$(DEVICE_MODEL)
+endif
+endif
 endef
 TARGET_DEVICES += asus_tuf-ax4200
 
