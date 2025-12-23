@@ -105,8 +105,10 @@
 
 &phy24 {
 	realtek,smi-address = <8>;
+	realtek,mdi-swap-enable;
 };
 
 &phy25 {
 	realtek,smi-address = <9>;
+	realtek,mdi-swap-enable;
 };
